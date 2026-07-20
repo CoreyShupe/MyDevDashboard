@@ -127,6 +127,11 @@ impl DashboardApp {
                 self.data = Rc::new(dev::mock_board());
                 self.active_tab = Tab::Projects;
             }
+            dev::DevView::AddProject => {
+                self.data = Rc::new(dev::mock_board());
+                self.projects.dev_open_add_project();
+                self.active_tab = Tab::Projects;
+            }
             dev::DevView::Project => {
                 let data = dev::mock_board();
                 if let Some(card) = data.projects.projects.first() {

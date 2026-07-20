@@ -43,8 +43,8 @@ allowlisted (it will prompt) — use the wrapper.
 | Database up / down / wipe+restart / shell | `./dev-dash db up` · `db down` · `db reset` · `db psql` |
 
 `VIEW` ∈ `onboarding · new-profile · board · board-empty · ticket · page · create · stage-edit ·
-notes · notes-empty · notes-file · todos · todos-empty · projects · projects-empty · project ·
-error` (defined in `ui/dev.rs`; see §8). Every one has a committed screenshot under
+notes · notes-empty · notes-file · todos · todos-empty · projects · projects-empty · add-project ·
+project · error` (defined in `ui/dev.rs`; see §8). Every one has a committed screenshot under
 `screenshots/` (§11). **Never edit `dev-dash` itself** (trust boundary, §6).
 
 **Before you're done:** `cargo fmt` → `cargo clippy` (clean) → `./dev-dash build` → **screenshot
@@ -86,6 +86,7 @@ can be turned into a todo, a ticket, or filed onto an existing ticket.
 | Concern            | Choice                                  | Notes |
 |--------------------|-----------------------------------------|-------|
 | UI framework       | `egui` + `eframe` (0.35)                | Native macOS, immediate-mode. `App::ui`/`App::logic`, `Panel`, `Modal`. |
+| File dialogs       | `rfd` (0.15)                            | Native folder/file picker (macOS `NSOpenPanel`). "Add project" uses `pick_folder()` so the repo path is chosen, not typed — a folder is required by construction. |
 | Async runtime      | `tokio`                                 | Workers/tasks only. Features incl. `process` — the `projects` feature shells out to `git`/the editor launcher off-thread (§10); no git *library* crate is used. |
 | Database           | PostgreSQL (via Docker)                 | Local, persistent volume. |
 | DB driver          | `sqlx` (0.9, runtime-checked queries)   | Builds WITHOUT a live DB. Migrations embedded. |
@@ -485,6 +486,7 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 | `todos-empty`    | Todos tab with nothing to do (empty state) |
 | `projects`       | Projects tab: card grid (up-to-date / out-of-sync / no-origin states) |
 | `projects-empty` | Projects tab with no projects (empty state) |
+| `add-project`    | The "add project" modal over the grid (native folder picker + name) |
 | `project`        | A project's full-page detail (metadata + live + removed worktrees) |
 | `error`          | The error modal |
 
@@ -607,7 +609,7 @@ tables + inline thumbnails); regenerate/extend it alongside the images.
 | `tasks/`    | `board`, `board-empty`, `ticket`, `page`, `create`, `stage-edit` |
 | `notes/`    | `notes`, `notes-empty`, `notes-file` |
 | `todos/`    | `todos`, `todos-empty` |
-| `projects/` | `projects`, `projects-empty`, `project` |
+| `projects/` | `projects`, `projects-empty`, `add-project`, `project` |
 | `shell/`    | `error` (cross-cutting overlays, not tied to a tab) |
 
 **The invariant (must always hold):**

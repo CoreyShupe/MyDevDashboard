@@ -10,6 +10,10 @@ license = "MIT"
 eframe = "0.35"
 egui = "0.35"
 
+# Native file/folder dialogs (approved: see AGENTS.md §1). Wraps macOS NSOpenPanel — the
+# "Add project" modal uses `pick_folder()` so the repo path is chosen, never typed.
+rfd = "0.15"
+
 # Async runtime — workers/tasks only. `process` lets the projects feature shell out to `git`
 # and the editor launcher off the worker thread; `time` bounds the `git fetch` on status reads.
 tokio = { version = "1", features = [

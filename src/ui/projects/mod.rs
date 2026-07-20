@@ -97,6 +97,11 @@ impl ProjectsState {
     pub fn dev_open_project(&mut self, project_id: Uuid) {
         self.open_project = Some(project_id);
     }
+
+    /// Dev-only: open the "add project" modal, pre-filled, for review (see `ui::dev`).
+    pub fn dev_open_add_project(&mut self) {
+        self.adding = Some(NewProjectModal::dev_sample());
+    }
 }
 
 /// Truncate a string to at most `max` chars, appending an ellipsis if cut. (Local copy so the

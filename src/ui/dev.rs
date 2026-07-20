@@ -38,6 +38,8 @@ pub enum DevView {
     NotesFile,
     /// The Projects tab: a grid of repository cards.
     Projects,
+    /// The "add project" modal, open over the Projects grid (folder picker + name).
+    AddProject,
     /// A single project's full-page detail (metadata + worktrees).
     Project,
     /// The Todos tab: quick tasks, one already checked off.
@@ -64,6 +66,7 @@ impl DevView {
             "notes" => Some(Self::Notes),
             "notes-file" => Some(Self::NotesFile),
             "projects" => Some(Self::Projects),
+            "add-project" => Some(Self::AddProject),
             "project" => Some(Self::Project),
             "todos" => Some(Self::Todos),
             "board-empty" => Some(Self::BoardEmpty),

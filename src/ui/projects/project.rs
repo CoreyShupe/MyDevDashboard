@@ -22,6 +22,18 @@ pub(super) struct NewProjectModal {
     path: String,
 }
 
+impl NewProjectModal {
+    /// Dev-only: a pre-filled draft (a name and an already-chosen folder) so the `add-project`
+    /// gallery screen shows the modal in its ready-to-submit state, without invoking the OS
+    /// folder picker.
+    pub(super) fn dev_sample() -> Self {
+        Self {
+            name: "my-dev-dashboard".to_owned(),
+            path: "/Users/you/Programming/MyDevDashboard".to_owned(),
+        }
+    }
+}
+
 impl ProjectsState {
     /// The grid: a header (title + "Add project") and the wrapping cards, or an empty state.
     pub(super) fn render_grid(&mut self, ui: &mut egui::Ui, projects: &ProjectsView) {
@@ -44,7 +56,7 @@ impl ProjectsState {
                 ui.label(
                     egui::RichText::new(
                         "Add a repository you already have on disk with \"Add project\" above — \
-                         paste its path and give it a name.",
+                         pick its folder and give it a name.",
                     )
                     .color(muted),
                 );
@@ -150,9 +162,42 @@ impl ProjectsState {
                 input::text_field(ui, &mut draft.name, "e.g. My Dev Dashboard");
 
                 ui.add_space(10.0);
-                ui.label(egui::RichText::new("Repository path").strong().color(muted));
+                ui.label(
+                    egui::RichText::new("Repository folder")
+                        .strong()
+                        .color(muted),
+                );
                 ui.add_space(4.0);
-                input::text_field(ui, &mut draft.path, "/Users/you/Programming/your-repo");
+                ui.horizontal(|ui| {
+                    if button::secondary(ui, &format!("{} Choose folder…", theme::icon::PATH))
+                        .clicked()
+                    {
+                        // Native macOS folder picker: only a directory can be selected, so the
+                        // chosen path is always a folder (the create service still verifies it's
+                        // a git repo). Blocking is fine — egui runs on the main thread and the OS
+                        // dialog is modal.
+                        if let Some(dir) = rfd::FileDialog::new()
+                            .set_title("Choose a repository folder")
+                            .pick_folder()
+                        {
+                            draft.path = dir.display().to_string();
+                        }
+                    }
+                    if draft.path.trim().is_empty() {
+                        ui.label(
+                            egui::RichText::new("No folder selected")
+                                .color(muted)
+                                .size(12.5),
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new(truncate(&draft.path, 46))
+                                .color(theme::palette().text)
+                                .size(12.5),
+                        )
+                        .on_hover_text(&draft.path);
+                    }
+                });
 
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
