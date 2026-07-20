@@ -41,12 +41,13 @@ allowlisted (it will prompt) — use the wrapper.
 | Screenshot a mock screen | `./dev-dash shot VIEW static/tmp/screenshots/NAME.png` |
 | Screenshot the LIVE running app (owner's real data) | `./dev-dash snap [static/tmp/screenshots/live.png]` |
 | Launch the app detached (in-app Restart rebuilds/relaunches) | `./dev-dash open [dev]` |
+| Build a double-clickable macOS `.app` into `builds/macos/` | `./dev-dash bundle` |
 | Database up / down / wipe+restart / shell | `./dev-dash db up` · `db down` · `db reset` · `db psql` |
 
 `VIEW` ∈ `onboarding · new-profile · profile-select · board · board-empty · ticket · page ·
 create · stage-edit · confirm-delete · notes · notes-empty · notes-file · todos · todos-empty ·
 projects · projects-empty · projects-loading · projects-pulling · add-project · project ·
-setup-script · worktree-creating · loading ·
+setup-script · worktree-creating · worktree-removing · loading ·
 error` (defined
 in `ui/dev.rs`; see §8). Every one has a committed screenshot under `static/screenshots/` (§11).
 **Never edit `dev-dash` itself** (trust boundary, §6).
@@ -203,8 +204,10 @@ src/
 Everything the app embeds or shells out to lives under **`static/`** so the repo root stays
 lean: `static/assets/` (embedded fonts), `static/migrations/` (embedded via `sqlx::migrate!`),
 `static/docker/` (both compose files), `static/scripts/` (the `db-*`/`sandbox-db` helpers +
-`window-id.swift`, the screenshot window-id helper — §8), `static/screenshots/` (the committed
-gallery, §11), and `static/tmp/` (gitignored scratch, §8).
+`window-id.swift`, the screenshot window-id helper — §8, + `bundle-macos.sh`, the macOS `.app`
+bundler — §14), `static/screenshots/` (the committed gallery, §11), and `static/tmp/` (gitignored
+scratch, §8). Build OUTPUT that is not a source input lives at the repo root under **`builds/`**
+(gitignored): `dev-dash bundle` writes `builds/macos/DevDashboard.app` there (§14).
 The `dev-dash` wrapper and the source `include_bytes!`/`sqlx::migrate!` paths point into `static/`;
 moving any of these means updating those references + `.claude/settings.json` in the same change.
 The project's Claude memory lives at **`.claude/CLAUDE.md`** (auto-loaded) and just imports this
@@ -275,7 +278,8 @@ mutates domain state locally except for transient input buffers (text fields).
 - Domain-specific **sub-error** enums (`ConfigError`, `DbError`, `TaskError`, `ProfileError`,
   `ProjectError`, `ProcessError`, …), each a `#[from]` variant of `AppError`. Sub-errors carry
   structured fields, not just strings. `ProjectError` is domain-rule refusals for projects/
-  worktrees (bad path, not-a-repo, duplicate worktree); `ProcessError` is an external command
+  worktrees (bad path, not-a-repo, duplicate worktree, branch name that escapes the worktree root);
+  `ProcessError` is an external command
   (git / the editor launcher) failing to spawn or exiting non-zero — kept separate on purpose (§10).
 - `#[error("...")]` messages state **what** failed and, where actionable, **how to fix**.
 - Errors crossing into the UI become a `UserFacingError { title, detail, remediation }`
@@ -531,6 +535,7 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 | `project`        | A project's full-page detail (metadata + setup script + worktrees) |
 | `setup-script`   | The "edit setup script" modal over the project detail (per-worktree bash) |
 | `worktree-creating` | Ticket detail with a worktree mid-provision — its setup-script spinner |
+| `worktree-removing` | Project detail with a live worktree being removed — its "Removing…" spinner |
 | `loading`        | The pre-first-snapshot loading screen (spinner before any data arrives) |
 | `error`          | The error modal |
 
@@ -656,8 +661,11 @@ drive a pull on a feature branch. Feature branches, dirty trees, and push/commit
 owner drives those. A dirty tree makes `--rebase` refuse; that surfaces as a `ProcessError`, nothing
 is silently rewritten. This is the ONLY place the app rewrites/advances refs.
 
-**Worktrees.** A worktree lives at **`{repo}/.github/worktrees/{name}`** (the path convention —
-never deviate) and is tied **1:1 to a ticket** within a project:
+**Worktrees.** A worktree lives OUTSIDE the repo, in a dev-dash-managed tree under the repo's
+**parent** directory: **`{repo-parent}/.dev-dash/worktrees/{repo}/{branch}`** (the path convention
+— never deviate; `{repo}` is the repo's own dir name, `{branch}` is the branch, so a slashed
+branch nests). dev-dash owns this tree because worktrees are surfaced and driven from the
+dashboard. A worktree is tied **1:1 to a ticket** within a project:
 
 - **Ticket-driven creation only.** The only create entry point is a ticket's detail page
   (§2 coordination). A ticket may have **at most one worktree per project**; `worktree::create`
@@ -666,6 +674,16 @@ never deviate) and is tied **1:1 to a ticket** within a project:
   and **reused** for every later worktree of that ticket, in any project — so a ticket's work
   sits on the same branch name everywhere. Different projects are different repos, so each still
   gets its own `-b` branch creation.
+- **The resolved path can't escape.** Before touching git or disk, `worktree::provision` builds the
+  path with `domain::projects::worktree::checked_worktree_path`, which resolves `.`/`..` LEXICALLY
+  (pure — no filesystem/symlink I/O) and refuses any name whose resolved path isn't exactly
+  `{worktree_root}/{name}` — a `..` traversal or absolute component that would climb out of (or
+  rewrite) the repo's worktree root. Such a name is rejected as `ProjectError::InvalidBranch` rather
+  than allowed to drive a `git`/`rm`/editor call on an unintended path. (This is a defense-in-depth
+  path guard, not a full git-ref validator: it catches traversal, while genuinely malformed refs —
+  `~`, `^`, `:`, spaces — are literal path chars that stay in-root here and are caught by git itself
+  on `worktree add`.) The raw `worktree_path` builder is still used for DISPLAY and for operating on
+  already-validated stored names.
 - **Adopt an existing folder.** `worktree::provision` checks the target path FIRST: if the folder
   already exists it skips `git worktree add` (and branch creation) entirely and just (re)creates
   the tracking row. This is deliberate — deleting a profile or project drops worktree ROWS via the
@@ -676,7 +694,10 @@ never deviate) and is tied **1:1 to a ticket** within a project:
   nothing is lost) and sets `removed_at`, keeping the row as a **historical marker** of the
   branch name. It can be **recreated** from that marker (same branch + folder) — **only from the
   ticket it originates from.** Recreation re-runs the setup script (removal deleted the folder, so
-  the provision is fresh — see below).
+  the provision is fresh — see below). Like create, a UI-driven removal is **off-loop with a
+  "waiting" state**: `app::projects::spawn_worktree_remove` guards it per-worktree-id via
+  `WorktreeService::{begin,end}_busy` (a double-click is a no-op) and the row swaps its buttons for
+  a "Removing…" spinner (`projects::View::busy`) until `settle_reload` lands (§8 `worktree-removing`).
 - **Markers are ticket-only in the UI.** The project detail lists **live worktrees only** (what's
   checked out right now); removed markers show exclusively on their originating ticket's detail,
   which owns recreation. Don't surface markers on the project page.
@@ -708,10 +729,11 @@ shown ABOVE the worktrees in that column. Rules:
   `provision`, so it can't roll back an already-created worktree.
 
 **Open in VS Code.** A worktree row's "Open in VS Code" launches `open -a "Visual Studio Code"
-<path>` off the worker thread. It changes no state, so its handler does **not** snapshot — it
-only surfaces an error on failure. It lives beside git in `system/projects/git.rs` (with the
-editor launch and the setup-script runner — the non-git external commands) and rolls up as
-`ProcessError` like git does.
+<path>` off the worker thread (`app::projects::spawn_worktree_open`). It changes no state, but the
+click still gets immediate feedback: the same per-worktree `busy` guard shows an "Opening…" spinner
+on the row, and `settle_reload` clears it (and surfaces a launch error) when the launch returns. It
+lives beside git in `system/projects/git.rs` (with the editor launch and the setup-script runner —
+the non-git external commands) and rolls up as `ProcessError` like git does.
 
 **Schema.** `projects` (profile-scoped, cascades; carries `setup_script`) + `worktrees` (a churny, lightweight table:
 `project_id`, `ticket_id`, `name`, `branch`, `removed_at`, with `UNIQUE(project_id, ticket_id)`
@@ -738,7 +760,7 @@ tables + inline thumbnails); regenerate/extend it alongside the images.
 | `tasks/`    | `board`, `board-empty`, `ticket`, `page`, `create`, `stage-edit` |
 | `notes/`    | `notes`, `notes-empty`, `notes-file` |
 | `todos/`    | `todos`, `todos-empty` |
-| `projects/` | `projects`, `projects-empty`, `projects-loading`, `projects-pulling`, `add-project`, `project`, `setup-script`, `worktree-creating` |
+| `projects/` | `projects`, `projects-empty`, `projects-loading`, `projects-pulling`, `add-project`, `project`, `setup-script`, `worktree-creating`, `worktree-removing` |
 | `shell/`    | `error`, `loading`, `confirm-delete` (cross-cutting, not tied to a tab) |
 
 **The invariant (must always hold):**
@@ -851,3 +873,46 @@ just clears it. `reconcile` clears a slot whose entity vanished from the snapsho
 gated: **delete ticket, delete stage, delete todo, remove worktree, delete project, delete
 profile.** Cross-feature ones (remove-worktree raised from the ticket detail) route the request
 to the owning feature via the shell, exactly like the create-worktree hand-off (§2).
+
+---
+
+## 14. macOS app bundle (`dev-dash bundle`)
+
+> **The bundle is a thin wrapper around the release build, not a redistributable.** This is a
+> self-use tool (§0) tied to a local Postgres and the repo's own `target/`. `dev-dash bundle`
+> just gives the owner a **double-clickable `.app`** (Dock/Spotlight/Finder) instead of a
+> terminal launch — it is NOT a signed, self-contained, shippable artifact.
+
+`./dev-dash bundle` → `static/scripts/bundle-macos.sh` release-builds and assembles
+**`builds/macos/DevDashboard.app`** (gitignored output, §2 top-level layout). Structure:
+
+```
+builds/macos/DevDashboard.app/Contents/
+├── Info.plist                    CFBundleExecutable = the launcher script (CFBundleIdentifier
+│                                 io.github.coreyshupe.devdashboard; version from Cargo.toml).
+├── MacOS/
+│   ├── DevDashboard              Launcher SCRIPT (the bundle executable).
+│   └── my-dev-dashboard          SYMLINK → target/release/<bin> (absolute; NOT a copy).
+└── Resources/
+    └── .env                      COPIED from the repo's .env at bundle time.
+```
+
+Three deliberate choices (do not "fix" them into a self-contained app):
+- **Executable is a symlink, not a copied binary.** An absolute symlink to
+  `target/release/<bin>` keeps the bundle tiny and means a later `cargo build --release` is
+  picked up with no re-bundle. It ties the bundle to this repo's checkout — intended.
+- **A launcher script, not the binary, is `CFBundleExecutable`.** Finder launches apps with
+  `cwd=/`, but the app resolves `.env` via `dotenvy` from the working directory (§ config). So
+  the launcher resolves its own location, `cd`s into `Contents/Resources` (where `.env` is
+  copied), then runs the symlinked binary — that `cd` is what makes config load. It also loops
+  on the **Restart exit code (86)** to relaunch, mirroring `dev-dash open` (it relaunches rather
+  than rebuilding, since a Finder launch has a minimal PATH and can't rely on `cargo`; the
+  symlink picks up any external rebuild on the next launch anyway). Keep the `86` in sync with
+  `RESTART_EXIT_CODE` (`src/main.rs`) and the `open` loop in `dev-dash`.
+- **`.env` is copied into the bundle.** The bundle carries its own config snapshot; editing the
+  repo `.env` afterward needs a re-bundle (or edit `Contents/Resources/.env` directly). If no
+  repo `.env` exists at bundle time the script warns (the app would error until one is present).
+
+`dev-dash bundle` is allowlisted (`Bash(./dev-dash:*)`, §6) and touches **no** database — it only
+builds + copies files, so it's safe to run anytime (unlike `dev-dash db`/`open`, §12). The bundler
+lives in `static/scripts/` and, like the other scripts, is edit-gated (§6).

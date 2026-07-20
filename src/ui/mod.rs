@@ -218,6 +218,24 @@ impl DashboardApp {
                 }
                 self.data = Rc::new(data);
             }
+            dev::DevView::WorktreeRemoving => {
+                let mut data = dev::mock_board();
+                // Open a project that has a live worktree and mark that worktree as being removed,
+                // so its row shows the "Removing…" spinner in place of the Open/Remove buttons.
+                let target = data
+                    .projects
+                    .worktrees
+                    .iter()
+                    .find(|w| w.is_live())
+                    .map(|w| (w.project_id, w.id));
+                if let Some((project_id, worktree_id)) = target {
+                    data.projects.busy =
+                        vec![(worktree_id, crate::domain::projects::WorktreeBusy::Removing)];
+                    self.projects.dev_open_project(project_id);
+                }
+                self.data = Rc::new(data);
+                self.active_tab = Tab::Projects;
+            }
             dev::DevView::Todos => {
                 self.data = Rc::new(dev::mock_board());
                 self.active_tab = Tab::Todos;

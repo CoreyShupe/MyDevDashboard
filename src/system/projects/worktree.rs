@@ -7,14 +7,14 @@
 //!   ticket's existing branch, ignoring the requested one, when there already is one).
 //! - Removal leaves a marker (`removed_at` set, folder cleaned); recreation revives the marker.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use sqlx::postgres::PgPool;
 use uuid::Uuid;
 
-use crate::domain::projects::Worktree;
-use crate::domain::projects::worktree::{folder_name_for_branch, worktree_path};
+use crate::domain::projects::worktree::{checked_worktree_path, worktree_path};
+use crate::domain::projects::{Worktree, WorktreeBusy};
 use crate::error::{AppError, DbError, ProjectError};
 
 use super::git;
@@ -29,6 +29,13 @@ pub struct WorktreeService {
     /// until setup has finished (AGENTS.md §10). `Arc` so all `Backend` clones share one set; the
     /// guard also dedupes a double-click into a single provision.
     creating: Arc<Mutex<HashSet<(Uuid, Uuid)>>>,
+    /// Existing worktrees with a slow action in flight, keyed by worktree id → what it's doing
+    /// (`Remove`/`Open`). Both shell out (git / the editor launcher), so they're spawned off the
+    /// worker loop and this guard surfaces the "waiting" state in the `View` — the worktree row
+    /// swaps its buttons for a spinner until it lands (AGENTS.md §10). Keyed by worktree id (unlike
+    /// `creating`, which has none yet). `Arc` so all `Backend` clones share it; the guard also
+    /// dedupes a double-click into a single run.
+    busy: Arc<Mutex<HashMap<Uuid, WorktreeBusy>>>,
 }
 
 impl WorktreeService {
@@ -36,6 +43,7 @@ impl WorktreeService {
         Self {
             pool,
             creating: Arc::new(Mutex::new(HashSet::new())),
+            busy: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -61,6 +69,30 @@ impl WorktreeService {
     /// — §3 bans `unwrap`/`expect`), same policy as the project service's caches.
     fn lock_creating(&self) -> std::sync::MutexGuard<'_, HashSet<(Uuid, Uuid)>> {
         self.creating
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Try to claim the "busy" guard for a worktree with `action`. Returns `true` if this call
+    /// started the action, or `false` if one was already in flight for that worktree — so callers
+    /// skip spawning a duplicate remove/open for the same worktree.
+    pub fn begin_busy(&self, id: Uuid, action: WorktreeBusy) -> bool {
+        self.lock_busy().insert(id, action).is_none()
+    }
+
+    /// Release a worktree's "busy" guard once its action finishes (success or failure).
+    pub fn end_busy(&self, id: Uuid) {
+        self.lock_busy().remove(&id);
+    }
+
+    /// The worktrees with a slow action in flight right now (drives their loading rows).
+    pub fn busy_ids(&self) -> HashMap<Uuid, WorktreeBusy> {
+        self.lock_busy().clone()
+    }
+
+    /// Lock the busy map, recovering a poisoned guard (same no-panic policy as `lock_creating`).
+    fn lock_busy(&self) -> std::sync::MutexGuard<'_, HashMap<Uuid, WorktreeBusy>> {
+        self.busy
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -134,14 +166,10 @@ impl WorktreeService {
             .into());
         }
 
-        let name = folder_name_for_branch(&branch);
-        if name.is_empty() {
-            return Err(ProjectError::Empty {
-                field: "branch name",
-            }
-            .into());
-        }
-        self.provision(project_id, ticket_id, &name, &branch).await
+        // The folder name IS the branch now: worktrees nest under `.dev-dash/worktrees/{repo}/`,
+        // and a valid git branch name is already a valid (possibly nested) relative path (§10).
+        self.provision(project_id, ticket_id, &branch, &branch)
+            .await
     }
 
     /// Recreate a previously-removed worktree from its historical marker (same branch + folder).
@@ -276,7 +304,14 @@ impl WorktreeService {
         branch: &str,
     ) -> Result<(Worktree, bool), AppError> {
         let repo = self.project_path(project_id).await?;
-        let path = worktree_path(&repo, name);
+        // Resolve the on-disk path and REFUSE a name that doesn't land exactly where we assume it
+        // will (a `..` traversal / absolute component escaping the worktree root) — before we
+        // touch git or the filesystem. Everything below then operates on a path we've proven stays
+        // inside `{repo}/.dev-dash/worktrees/{repo}/` (AGENTS.md §10).
+        let path =
+            checked_worktree_path(&repo, name).ok_or_else(|| ProjectError::InvalidBranch {
+                branch: branch.to_owned(),
+            })?;
         // If the target folder already exists, adopt it as-is: skip `git worktree add` (and branch
         // creation) entirely. This happens when a folder was left on disk after its rows were
         // cascade-deleted (deleting a profile or project drops worktree ROWS but not folders —

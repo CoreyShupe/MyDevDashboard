@@ -58,6 +58,9 @@ pub enum DevView {
     /// The ticket detail (full page) with a worktree being provisioned — its setup-script spinner
     /// showing, so the worktree isn't yet presented as ready (§10).
     WorktreeCreating,
+    /// A project's detail page with a live worktree being removed — its row shows the "Removing…"
+    /// spinner in place of the Open/Remove buttons while `git worktree remove` runs (§10).
+    WorktreeRemoving,
     /// The Todos tab: quick tasks, one already checked off.
     Todos,
     /// Empty states (profile exists, but the feature has no data yet).
@@ -91,6 +94,7 @@ impl DevView {
             "project" => Some(Self::Project),
             "setup-script" => Some(Self::SetupScript),
             "worktree-creating" => Some(Self::WorktreeCreating),
+            "worktree-removing" => Some(Self::WorktreeRemoving),
             "todos" => Some(Self::Todos),
             "board-empty" => Some(Self::BoardEmpty),
             "notes-empty" => Some(Self::NotesEmpty),
@@ -330,14 +334,14 @@ pub fn mock_board() -> ViewData {
         worktree(
             dashboard.id,
             tickets[1].id,
-            "projects-tab",
+            "feature/projects-tab",
             "feature/projects-tab",
             false,
         ),
         worktree(
             api.id,
             tickets[1].id,
-            "projects-tab",
+            "feature/projects-tab",
             "feature/projects-tab",
             false,
         ),
@@ -345,7 +349,7 @@ pub fn mock_board() -> ViewData {
         worktree(
             dashboard.id,
             tickets[2].id,
-            "design-pass",
+            "feature/design-pass",
             "feature/design-pass",
             true,
         ),
@@ -373,6 +377,7 @@ pub fn mock_board() -> ViewData {
             worktrees,
             refreshing: false,
             creating: Vec::new(),
+            busy: Vec::new(),
         },
         todos: todos::View { todos },
     }

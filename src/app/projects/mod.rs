@@ -9,7 +9,7 @@ pub mod worktree;
 
 use uuid::Uuid;
 
-use crate::domain::projects::{GitStatus, Project, Worktree};
+use crate::domain::projects::{GitStatus, Project, Worktree, WorktreeBusy};
 use crate::error::AppError;
 use crate::system::Backend;
 use crate::system::projects::ProjectsService;
@@ -85,6 +85,9 @@ pub struct View {
     /// setup script). The ticket/project detail shows a loading row for each until it lands, so a
     /// worktree isn't presented as ready until its setup script has finished (AGENTS.md §10).
     pub creating: Vec<(Uuid, Uuid)>,
+    /// Existing worktrees with a slow action (remove / open) in flight, keyed by worktree id. Their
+    /// row swaps its action buttons for a "waiting" spinner until it lands (AGENTS.md §10).
+    pub busy: Vec<(Uuid, WorktreeBusy)>,
 }
 
 impl View {
@@ -115,11 +118,13 @@ impl View {
 
         let worktrees = service.worktree.list_for_profile(profile_id).await?;
         let creating = service.worktree.creating_ids().into_iter().collect();
+        let busy = service.worktree.busy_ids().into_iter().collect();
         Ok(Self {
             projects,
             worktrees,
             refreshing: service.project.is_refreshing(),
             creating,
+            busy,
         })
     }
 
@@ -171,6 +176,15 @@ impl View {
     pub fn is_creating(&self, project_id: Uuid, ticket_id: Uuid) -> bool {
         self.creating.contains(&(project_id, ticket_id))
     }
+
+    /// The slow action in flight on a worktree right now (remove / open), if any — the row shows a
+    /// "waiting" spinner in its place.
+    pub fn is_busy(&self, worktree_id: Uuid) -> Option<WorktreeBusy> {
+        self.busy
+            .iter()
+            .find(|(id, _)| *id == worktree_id)
+            .map(|(_, action)| *action)
+    }
 }
 
 /// Kick off a non-blocking git refresh (AGENTS.md §10). If no refresh is already running, claim
@@ -211,6 +225,55 @@ pub fn spawn_pull(backend: &Backend, emitter: &Emitter, id: Uuid) {
         let result = backend.projects.project.pull(id).await;
         backend.projects.project.end_pull(id);
         emitter.settle(&backend, result).await;
+    });
+}
+
+/// Kick off a non-blocking worktree **removal** (AGENTS.md §10). `git worktree remove` shells out,
+/// so — like create — it's spawned off the worker loop with a "waiting" state rather than awaited
+/// inline. Claims the per-worktree busy guard first (a double-click is a no-op), emits the loading
+/// snapshot, THEN spawns; snapshotting before the spawn guarantees the loading state reaches the UI
+/// before the (possibly quick) clearing snapshot, so the spinner can't get stuck on. `settle_reload`
+/// always re-snapshots (clearing the busy state) and surfaces any error — a `git` refusal (dirty
+/// tree) leaves the worktree live and shows the error.
+pub async fn spawn_worktree_remove(backend: &Backend, emitter: &Emitter, id: Uuid) {
+    if !backend
+        .projects
+        .worktree
+        .begin_busy(id, WorktreeBusy::Removing)
+    {
+        return; // already removing this worktree; its settle will carry the result
+    }
+    emitter.snapshot(backend).await; // show the "Removing…" spinner before the work starts
+    let backend = backend.clone();
+    let emitter = emitter.clone();
+    tokio::spawn(async move {
+        let result = backend.projects.worktree.remove(id).await;
+        backend.projects.worktree.end_busy(id);
+        emitter.settle_reload(&backend, result).await;
+    });
+}
+
+/// Kick off a non-blocking **Open in VS Code** for a worktree (AGENTS.md §10). Launching the editor
+/// shells out and changes no state, but a click still deserves immediate feedback — so, like
+/// [`spawn_worktree_remove`], it claims the per-worktree busy guard, shows an "Opening…" spinner,
+/// then spawns the launch. `settle_reload` re-snapshots to clear the spinner (and surfaces a launch
+/// error). Snapshotting before the spawn keeps the quick launch from clearing the spinner before it
+/// ever shows.
+pub async fn spawn_worktree_open(backend: &Backend, emitter: &Emitter, id: Uuid) {
+    if !backend
+        .projects
+        .worktree
+        .begin_busy(id, WorktreeBusy::Opening)
+    {
+        return; // already opening this worktree
+    }
+    emitter.snapshot(backend).await; // show the "Opening…" spinner before the launch
+    let backend = backend.clone();
+    let emitter = emitter.clone();
+    tokio::spawn(async move {
+        let result = backend.projects.worktree.open_in_editor(id).await;
+        backend.projects.worktree.end_busy(id);
+        emitter.settle_reload(&backend, result).await;
     });
 }
 

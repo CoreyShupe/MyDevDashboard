@@ -147,7 +147,7 @@ pub async fn branch_exists(repo: &str, branch: &str) -> bool {
 }
 
 /// Create a worktree at `path`. When `new_branch`, creates `branch` (`-b`); otherwise checks
-/// out the existing `branch`. Git creates intermediate directories (`.github/worktrees/…`).
+/// out the existing `branch`. Git creates intermediate directories (`.dev-dash/worktrees/{repo}/…`).
 pub async fn worktree_add(
     repo: &str,
     path: &Path,

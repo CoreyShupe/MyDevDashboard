@@ -66,6 +66,7 @@ reference with all options and flags.
 | `dev-dash open [dev]`     | Launch the app detached. Default = release; `dev` = `cargo run`. **Restart** relaunches. |
 | `dev-dash help`           | Print the full command reference (also `-h` / `--help`). |
 | `dev-dash build [release]`| Compile (debug by default; `release` for optimized). |
+| `dev-dash bundle`         | Build a double-clickable macOS `.app` at `builds/macos/DevDashboard.app` (see below). |
 | `dev-dash db up`          | Start local PostgreSQL (persistent volume; creates `.env` from the example if missing). |
 | `dev-dash db down`        | Stop the database. **Data is preserved.** |
 | `dev-dash db psql`        | Open a `psql` shell against the running database. |
@@ -78,6 +79,23 @@ On first launch you'll land on the onboarding screen to create your first **prof
 into the dashboard with a left side-nav — **Tasks**, **Notes**, **Todos**, **Projects** — and an
 empty workspace. See [What it does](#what-it-does) above for a tour of each, or browse the full
 [screenshot gallery](static/screenshots/).
+
+### A double-clickable app (`dev-dash bundle`)
+
+Prefer launching from the Dock/Finder over the terminal? `dev-dash bundle` release-builds and
+assembles a macOS app bundle at **`builds/macos/DevDashboard.app`** — `open` it, drag it to your
+Dock, or find it in Spotlight:
+
+```bash
+dev-dash bundle
+open builds/macos/DevDashboard.app
+```
+
+It's a **thin wrapper around your local build**, not a shippable app: the bundle's executable is a
+*symlink* into `target/release/`, and it carries a *copy* of your `.env` (its launcher `cd`s into
+the bundle so config loads correctly). So it works as long as this repo stays in place; re-run
+`dev-dash bundle` after changing `.env`, and any later `cargo build --release` is picked up
+automatically. The in-app **Restart** button relaunches it, just like `dev-dash open`.
 
 ## The database & persistence (important)
 
@@ -165,7 +183,7 @@ modal but doesn't undo the worktree.
 Everything else in the app is already portable: all **git** operations shell out to `git`
 itself; the DB, UI, and workers are `sqlx`/`egui`/`tokio`; the **Add project** folder picker uses
 `rfd`, which draws native dialogs on every platform; the Nunito font is embedded; and the
-`{repo}/.github/worktrees/{name}` layout is a plain path. A failed "Open in VS Code" or setup
+`{repo-parent}/.dev-dash/worktrees/{repo}/{branch}` layout is a plain path. A failed "Open in VS Code" or setup
 script is already handled as a best-effort/surfaced `ProcessError` (it shows, it doesn't crash),
 so the app is usable on other platforms even before you touch those calls.
 
@@ -181,6 +199,9 @@ so the app is usable on other platforms even before you touch those calls.
   window-raising is needed, so these need only **Screen Recording** permission (not Accessibility).
   `pkill`/`perl` handle process + timing control. A port would swap these for the platform's
   equivalents (e.g. `wmctrl`/`xdotool` + `import`/`grim` on Linux).
+- `dev-dash bundle` is **macOS-only**: it produces a `.app` bundle (`Info.plist` + `Contents/`)
+  and uses BSD `sed -i ''`. A port would emit the platform's launcher instead (e.g. a `.desktop`
+  file on Linux) — the build + symlink + `.env`-copy logic is otherwise portable.
 
 ## Troubleshooting
 

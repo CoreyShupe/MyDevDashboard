@@ -121,6 +121,11 @@ pub enum ProjectError {
     WorktreeMissing { id: String },
 
     #[error(
+        "`{branch}` is not a valid branch name — it resolves outside its worktree directory (e.g. a `..` or an absolute path). Use a plain branch name"
+    )]
+    InvalidBranch { branch: String },
+
+    #[error(
         "`{path}` can't be pulled from here — the one-click pull only runs on a shared `main`/`develop` branch. Pull it yourself for anything else"
     )]
     NotPullable { path: String },

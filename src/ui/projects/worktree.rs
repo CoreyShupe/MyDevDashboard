@@ -121,7 +121,7 @@ fn worktree_row(
         if projects.is_creating(w.project_id, w.ticket_id) {
             setup_indicator(ui);
         } else {
-            worktree_actions(ui, bridge, w, remove);
+            worktree_actions(ui, bridge, w, remove, projects);
         }
     });
     ui.add_space(6.0);
@@ -181,7 +181,7 @@ pub(crate) fn render_ticket_worktrees(
                 if projects.is_creating(w.project_id, w.ticket_id) {
                     setup_indicator(ui);
                 } else {
-                    worktree_actions(ui, bridge, w, remove);
+                    worktree_actions(ui, bridge, w, remove, projects);
                 }
             });
             ui.add_space(6.0);
@@ -202,8 +202,19 @@ pub(crate) fn render_ticket_worktrees(
 
 /// The action row for a worktree: Open + Remove when live, Recreate when a marker. Open and
 /// Recreate emit directly; Remove is destructive, so it only records the request into `remove`
-/// (the caller confirms before it fires — AGENTS.md §13).
-fn worktree_actions(ui: &mut egui::Ui, bridge: &Bridge, w: &Worktree, remove: &mut Option<Uuid>) {
+/// (the caller confirms before it fires — AGENTS.md §13). While a slow action (remove / open) is
+/// in flight on this worktree, its buttons are replaced by a "waiting" spinner (AGENTS.md §10).
+fn worktree_actions(
+    ui: &mut egui::Ui,
+    bridge: &Bridge,
+    w: &Worktree,
+    remove: &mut Option<Uuid>,
+    projects: &ProjectsView,
+) {
+    if let Some(busy) = projects.is_busy(w.id) {
+        spinner_row(ui, busy.label());
+        return;
+    }
     ui.horizontal(|ui| {
         if w.is_live() {
             if button::secondary(
@@ -239,15 +250,17 @@ fn setup_loading_row(ui: &mut egui::Ui, label: &str) {
 /// `worktree add` plus the project's setup script (e.g. `bun install`), which can take a while.
 /// Until it lands the worktree isn't presented as ready (AGENTS.md §10).
 fn setup_indicator(ui: &mut egui::Ui) {
+    spinner_row(ui, "Setting up… running setup script");
+}
+
+/// A small accent spinner + "waiting" label, shown in place of a worktree's actions while a slow
+/// operation (provision / remove / open) is in flight (AGENTS.md §10).
+fn spinner_row(ui: &mut egui::Ui, label: &str) {
     let accent = theme::palette().accent;
     ui.horizontal(|ui| {
         ui.add(egui::Spinner::new().size(14.0).color(accent));
         ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new("Setting up… running setup script")
-                .color(accent)
-                .size(12.5),
-        );
+        ui.label(egui::RichText::new(label).color(accent).size(12.5));
     });
 }
 

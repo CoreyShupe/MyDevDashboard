@@ -7,4 +7,4 @@ pub mod project;
 pub mod worktree;
 
 pub use project::{GitStatus, Project};
-pub use worktree::Worktree;
+pub use worktree::{Worktree, WorktreeBusy};

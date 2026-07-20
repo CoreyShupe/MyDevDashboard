@@ -90,6 +90,7 @@ Local repositories + their git worktrees.
 | Project detail (setup script + metadata + live/removed worktrees) | `project` |
 | Edit-setup-script modal (per-worktree bash) | `setup-script` |
 | Ticket detail with a worktree mid-setup (spinner) | `worktree-creating` |
+| Project detail with a live worktree being removed ("Removing…" spinner) | `worktree-removing` |
 
 ![projects](projects/projects.png)
 ![projects-empty](projects/projects-empty.png)
@@ -99,6 +100,7 @@ Local repositories + their git worktrees.
 ![project](projects/project.png)
 ![setup-script](projects/setup-script.png)
 ![worktree-creating](projects/worktree-creating.png)
+![worktree-removing](projects/worktree-removing.png)
 
 ## shell
 

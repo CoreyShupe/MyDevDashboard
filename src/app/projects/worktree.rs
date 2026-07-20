@@ -45,10 +45,10 @@ impl Command {
 
 /// Perform a worktree command.
 ///
-/// `Create`/`Recreate` provision on disk AND run the project's setup script, which can be slow, so
-/// they're spawned off the worker loop with an in-flight loading state (AGENTS.md §10) rather than
-/// awaited inline — the worktree isn't shown as ready until its setup finishes. `Remove` settles
-/// inline (it's quick); `Open` changes no state, so it only surfaces an error.
+/// Every action here shells out (git / the editor launcher), so all are spawned off the worker loop
+/// with an in-flight "waiting" state (AGENTS.md §10) rather than awaited inline: `Create`/`Recreate`
+/// aren't shown as ready until their setup script finishes; `Remove`/`Open` swap the worktree row's
+/// buttons for a spinner until they land. Each spawner shows the loading state before spawning.
 pub async fn handle(backend: &Backend, emitter: &Emitter, cmd: Command) {
     match cmd {
         Command::Create {
@@ -69,14 +69,14 @@ pub async fn handle(backend: &Backend, emitter: &Emitter, cmd: Command) {
             crate::app::projects::spawn_worktree_recreate(backend, emitter, id);
         }
         Command::Remove { id } => {
-            emitter
-                .settle(backend, backend.projects.worktree.remove(id).await)
-                .await;
+            // `git worktree remove` shells out; spawn it off the loop with a "Removing…" spinner
+            // (the spawner shows the loading state before spawning).
+            crate::app::projects::spawn_worktree_remove(backend, emitter, id).await;
         }
         Command::Open { id } => {
-            if let Err(e) = backend.projects.worktree.open_in_editor(id).await {
-                emitter.error(&e);
-            }
+            // Launching VS Code shells out; spawn it with an "Opening…" spinner for immediate
+            // feedback (it changes no state — the settle just clears the spinner).
+            crate::app::projects::spawn_worktree_open(backend, emitter, id).await;
         }
     }
 }

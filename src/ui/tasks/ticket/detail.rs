@@ -176,8 +176,8 @@ impl BoardState {
                 ui.columns(2, |cols| {
                     cols[0].spacing_mut().item_spacing.x = 8.0;
                     body_core(&mut cols[0], modal, view, &mut out);
-                    body_relationships(&mut cols[0], modal, view, &mut out);
                     body_worktrees(&mut cols[0], modal, projects, bridge, &mut out);
+                    body_relationships(&mut cols[0], modal, view, &mut out);
                     cols[1].spacing_mut().item_spacing.x = 8.0;
                     notes_section(&mut cols[1], modal, &mut out, None);
                 });
