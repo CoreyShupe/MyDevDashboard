@@ -13,11 +13,12 @@
 #     dev-dash db psql          Open a psql shell against the running DB.
 #     dev-dash sandbox CMD      Isolated SANDBOX db for migration checks — never touches prod.
 #                               CMD = up|down|reset|psql|migrate|url (port 5434). See AGENTS §12.
-#     dev-dash open [dev]       Launch the app DETACHED and exit 0.
-#                               default = prod (release build, then run the binary);
-#                               `dev`   = `cargo run` (debug).
-#                               In-app "Restart" (exit 86) is caught here: prod rebuilds +
-#                               relaunches; dev re-runs `cargo run`.
+#     dev-dash open [prod]      Launch the app DETACHED and exit 0.
+#                               default = dev (`cargo run`, debug);
+#                               `prod`  = release build, then run the binary.
+#                               In-app "Restart" (exit 86) is caught here: dev re-runs
+#                               `cargo run`; prod rebuilds + relaunches. The Restart button
+#                               only exists in dev/debug builds — release omits it.
 #     dev-dash bundle [copy]    Build a macOS .app bundle into builds/macos/DevDashboard.app.
 #                               Release-builds, then assembles a bundle whose executable is a
 #                               SYMLINK to target/release/<bin> (not a copy) and whose launcher
@@ -104,7 +105,7 @@ case "$cmd" in
     ;;
 
   open)
-    mode="${2:-prod}"
+    mode="${2:-dev}"
     # The in-app "Restart" button exits with this code; the detached loops below catch it and
     # relaunch instead of stopping. MUST match RESTART_EXIT_CODE in src/main.rs.
     restart_code=86
@@ -136,7 +137,7 @@ case "$cmd" in
         ' _ "$restart_code" "$bin" >/dev/null 2>&1 &
         ;;
       *)
-        echo "error: unknown open mode '$mode' (use 'dev' or omit for prod)" >&2
+        echo "error: unknown open mode '$mode' (omit for dev, or 'prod')" >&2
         usage 1
         ;;
     esac

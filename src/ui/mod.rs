@@ -358,11 +358,15 @@ impl DashboardApp {
 
                 // Footer: manual refresh (re-pulls state from the DB) + restart. In a
                 // bottom-up layout the first item added sits lowest, so Restart lands UNDER
-                // Refresh. Restart exits with `RESTART_EXIT_CODE`, which `dev-dash open`
-                // catches to rebuild + relaunch (a plain run just exits).
+                // Refresh. Restart is a DEV-ONLY affordance: it exits with `RESTART_EXIT_CODE`,
+                // which the `dev-dash open` dev loop catches to re-run. Release builds (the .app
+                // bundle) can't relaunch, so the button is omitted there entirely — the short-
+                // circuit means `button::ghost` is never even rendered in release.
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     ui.add_space(12.0);
-                    if button::ghost(ui, &format!("{} Restart", theme::icon::RESTART)).clicked() {
+                    if cfg!(debug_assertions)
+                        && button::ghost(ui, &format!("{} Restart", theme::icon::RESTART)).clicked()
+                    {
                         std::process::exit(crate::RESTART_EXIT_CODE);
                     }
                     if button::ghost(ui, &format!("{} Refresh", theme::icon::REFRESH)).clicked() {

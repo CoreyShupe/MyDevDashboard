@@ -40,7 +40,7 @@ allowlisted (it will prompt) — use the wrapper.
 | Build | `./dev-dash build`  ⟵ **not** `cargo build` |
 | Screenshot a mock screen | `./dev-dash shot VIEW static/tmp/screenshots/NAME.png` |
 | Screenshot the LIVE running app (owner's real data) | `./dev-dash snap [static/tmp/screenshots/live.png]` |
-| Launch the app detached (in-app Restart rebuilds/relaunches) | `./dev-dash open [dev]` |
+| Launch the app detached (dev by default; `prod` for release + Restart relaunch) | `./dev-dash open [prod]` |
 | Build a double-clickable macOS `.app` (`copy` also installs to `/Applications`) | `./dev-dash bundle [copy]` |
 | Database up / down / wipe+restart / shell | `./dev-dash db up` · `db down` · `db reset` · `db psql` |
 
@@ -421,14 +421,17 @@ to a full-screen grab, so a capture never silently produces nothing.
 ./dev-dash build                                  # compile (allowlisted; use instead of cargo build)
 ./dev-dash shot VIEW static/tmp/screenshots/NAME.png     # capture one DEV_VIEW screen, then Read the PNG
 ./dev-dash snap [static/tmp/screenshots/live.png]        # capture the ALREADY-RUNNING app (real data)
-./dev-dash open [dev]                             # launch detached; loops on Restart (see below)
+./dev-dash open [prod]                            # launch detached; loops on Restart (see below)
 ```
 
 The in-app **"Restart"** button (nav footer, under Refresh) exits with `RESTART_EXIT_CODE`
 (**86**, in `src/main.rs` — chosen clear of reserved bands: 0–2, sysexits 64–78, Rust panic 101,
 128+signal). `dev-dash open` runs the app in a loop that catches exactly that code and
-**rebuilds + relaunches** (prod) or **re-runs `cargo run`** (dev); any other exit (incl. a
-normal close) ends the loop. Keep the `86` in `dev-dash`'s `open` loop in sync with the constant.
+**re-runs `cargo run`** (dev, the default) or **rebuilds + relaunches** (`prod`); any other exit
+(incl. a normal close) ends the loop. Keep the `86` in `dev-dash`'s `open` loop in sync with the
+constant. **The Restart button only exists in dev/debug builds** — it's gated on
+`cfg!(debug_assertions)`, so release builds (the `.app` bundle, `dev-dash open prod`) omit it
+entirely, because a release/Finder launch has no relaunch loop to catch the exit code (§14).
 
 > **`dev-dash` is a trust boundary — do not edit it casually.** `.claude/settings.json`
 > allowlists `Bash(./dev-dash:*)` to run without prompting, and `dev-dash` internally runs
@@ -908,11 +911,12 @@ Three deliberate choices (do not "fix" them into a self-contained app):
 - **A launcher script, not the binary, is `CFBundleExecutable`.** Finder launches apps with
   `cwd=/`, but the app resolves `.env` via `dotenvy` from the working directory (§ config). So
   the launcher resolves its own location, `cd`s into `Contents/Resources` (where `.env` is
-  copied), then runs the symlinked binary — that `cd` is what makes config load. It also loops
-  on the **Restart exit code (86)** to relaunch, mirroring `dev-dash open` (it relaunches rather
-  than rebuilding, since a Finder launch has a minimal PATH and can't rely on `cargo`; the
-  symlink picks up any external rebuild on the next launch anyway). Keep the `86` in sync with
-  `RESTART_EXIT_CODE` (`src/main.rs`) and the `open` loop in `dev-dash`.
+  copied), then `exec`s the symlinked binary — that `cd` is what makes config load. It does
+  **NOT** loop on the Restart exit code (86): relaunch doesn't work from a Finder-launched
+  bundle, so the **Restart button is compiled out of release builds entirely** (gated on
+  `cfg!(debug_assertions)`, §8/footer) — Restart-relaunch stays a `dev-dash open` (dev/debug)
+  feature. The symlink still means an external `cargo build --release` is picked up on the next
+  launch.
 - **`.env` is copied into the bundle.** The bundle carries its own config snapshot; editing the
   repo `.env` afterward needs a re-bundle (or edit `Contents/Resources/.env` directly). If no
   repo `.env` exists at bundle time the script warns (the app would error until one is present).

@@ -37,11 +37,12 @@ impl BoardState {
         let muted = theme::palette().muted;
         let drag_id = egui::Id::new(("ticket_drag", ticket.id));
 
-        // Renders the card surface once; returns the rect of the 6-dot drag handle so the
-        // caller can restrict drag-sensing to just that handle. Used both for the normal
-        // in-column layout and for the floating copy painted while dragging.
-        let render_body = |ui: &mut egui::Ui| -> egui::Rect {
+        // Renders the card surface once; returns the rects of the 6-dot drag handle and the
+        // title so the caller can restrict drag-sensing to just those. Used both for the
+        // normal in-column layout and for the floating copy painted while dragging.
+        let render_body = |ui: &mut egui::Ui| -> (egui::Rect, egui::Rect) {
             let mut handle_rect = egui::Rect::NOTHING;
+            let mut title_rect = egui::Rect::NOTHING;
             card::inset(ui, |ui| {
                 ui.set_width(ui.available_width());
                 // The 6-dot grip lives in its OWN right-hand gutter that the title can never
@@ -50,19 +51,22 @@ impl BoardState {
                 const HANDLE_GUTTER: f32 = 22.0;
                 ui.horizontal_top(|ui| {
                     let title_width = (ui.available_width() - HANDLE_GUTTER).max(0.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(title_width, 0.0),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            ui.set_width(title_width);
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(truncate_title(&ticket.title)).strong(),
-                                )
-                                .wrap(),
-                            );
-                        },
-                    );
+                    title_rect = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(title_width, 0.0),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                ui.set_width(title_width);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(truncate_title(&ticket.title)).strong(),
+                                    )
+                                    .wrap(),
+                                );
+                            },
+                        )
+                        .response
+                        .rect;
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                         handle_rect = ui
                             .add(
@@ -82,13 +86,13 @@ impl BoardState {
                     ui.label(egui::RichText::new(preview).color(muted).size(12.5));
                 }
             });
-            handle_rect
+            (handle_rect, title_rect)
         };
 
         // While dragging, lift the WHOLE card onto a floating layer that follows the pointer
         // from the grab point (shared `dnd::drag_ghost`), so the entire card appears to move
-        // even though only the handle started the drag. Payload = the ticket id, re-set each
-        // frame like `dnd_drag_source` does.
+        // even though only the handle/title started the drag. Payload = the ticket id, re-set
+        // each frame like `dnd_drag_source` does.
         if ui.ctx().is_being_dragged(drag_id) {
             egui::DragAndDrop::set_payload(ui.ctx(), ticket.id);
             dnd::drag_ghost(ui, drag_id, |ui| {
@@ -99,22 +103,39 @@ impl BoardState {
 
         // Normal layout: lay out the card, then wire interactions on top of it.
         let egui::InnerResponse {
-            inner: handle_rect,
+            inner: (handle_rect, title_rect),
             response,
         } = ui.scope(render_body);
 
-        // Clicking anywhere on the card opens the detail modal. Added FIRST so the handle's
-        // drag widget below sits on top of it — a press on the handle then starts a drag
-        // while a press anywhere else registers as a click.
+        // Clicking anywhere on the card opens the detail modal. Added FIRST so the drag
+        // source below sits on top of it over the parts it covers — a press on the grip or
+        // title starts a drag while a press elsewhere (e.g. the description) is a click.
         let click = ui
             .interact(response.rect, drag_id.with("open"), egui::Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
 
-        // The 6-dot handle is the ONLY drag source. Grab cursor advertises it.
-        ui.interact(handle_rect, drag_id, egui::Sense::drag())
-            .on_hover_cursor(egui::CursorIcon::Grab);
+        // The grip AND the title are drag sources: dragging from either lifts the card, while
+        // a click on either still opens the modal (`click_and_drag`, so the title stays
+        // clickable). The description gutter stays click-only via `click` above.
+        let drag = ui.interact(
+            handle_rect.union(title_rect),
+            drag_id,
+            egui::Sense::click_and_drag(),
+        );
 
-        if click.clicked() {
+        // Keep the pre-existing cursors exactly (no visual change): Grab over the 6-dot grip,
+        // PointingHand over the title (matching the card's click affordance).
+        if drag.hovered()
+            && let Some(pos) = ui.ctx().pointer_hover_pos()
+        {
+            ui.ctx().set_cursor_icon(if handle_rect.contains(pos) {
+                egui::CursorIcon::Grab
+            } else {
+                egui::CursorIcon::PointingHand
+            });
+        }
+
+        if click.clicked() || drag.clicked() {
             self.open_ticket_modal(bridge, ticket);
         }
     }

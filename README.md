@@ -47,13 +47,14 @@ ln -sf "$(pwd)/dev-dash" /usr/local/bin/dev-dash   # or: ln -sf "$(pwd)/dev-dash
 
 ```bash
 dev-dash db up      # start local PostgreSQL (persistent volume; creates .env from the example)
-dev-dash            # release-build + launch detached; migrations run automatically at startup
+dev-dash            # launch detached (dev/`cargo run`); migrations run automatically at startup
 ```
 
 That's it — **running `dev-dash` with no arguments is the recommended way to launch** (it's
-exactly `dev-dash open`). It builds a release binary, launches the app in the background, and
-hands your shell back; use `dev-dash open dev` for a debug (`cargo run`) build instead. The
-in-app **Restart** button (nav footer) rebuilds and relaunches without you leaving the app.
+exactly `dev-dash open`). It runs a debug (`cargo run`) build, launches the app in the background,
+and hands your shell back; use `dev-dash open prod` for an optimized release build instead. In
+dev/debug builds the in-app **Restart** button (nav footer) relaunches without you leaving the
+app; **release builds omit the Restart button** (a release launch has no relaunch loop).
 
 Not sure what's available? Run **`dev-dash help`** (or `-h` / `--help`) to print the full command
 reference with all options and flags.
@@ -63,7 +64,7 @@ reference with all options and flags.
 | Command | What it does |
 |---------|--------------|
 | `dev-dash` *(no args)*    | **Launch the app** — the recommended default; equivalent to `dev-dash open`. |
-| `dev-dash open [dev]`     | Launch the app detached. Default = release; `dev` = `cargo run`. **Restart** relaunches. |
+| `dev-dash open [prod]`    | Launch the app detached. Default = dev (`cargo run`); `prod` = release build. **Restart** relaunches (dev/debug only). |
 | `dev-dash help`           | Print the full command reference (also `-h` / `--help`). |
 | `dev-dash build [release]`| Compile (debug by default; `release` for optimized). |
 | `dev-dash bundle [copy]`  | Build a double-clickable macOS `.app` at `builds/macos/DevDashboard.app`; `copy` also installs it to `/Applications` (see below). |
@@ -97,7 +98,8 @@ It's a **thin wrapper around your local build**, not a shippable app: the bundle
 *symlink* into `target/release/`, and it carries a *copy* of your `.env` (its launcher `cd`s into
 the bundle so config loads correctly). So it works as long as this repo stays in place; re-run
 `dev-dash bundle` after changing `.env`, and any later `cargo build --release` is picked up
-automatically. The in-app **Restart** button relaunches it, just like `dev-dash open`.
+automatically. Being a release build, the bundle has **no Restart button** (nothing to catch a
+relaunch); quit and reopen it to pick up a rebuild.
 
 The icon is drawn from the app's own design system (a teal tile + the "dashboard" glyph) — the
 source is `static/assets/icon/AppIcon.svg`; edit it and re-run `static/scripts/icon-gen.sh` to
@@ -139,13 +141,14 @@ Everything is driven by `.env` (git-ignored). See [`.env.example`](.env.example)
 cargo fmt          # format
 cargo clippy       # lint (keep it clean)
 dev-dash build     # compile (builds WITHOUT a running database — runtime-checked queries)
-dev-dash open       # run detached; the in-app "Restart" button then rebuilds + relaunches
-dev-dash open dev  # same, but a debug `cargo run` build
+dev-dash open       # run detached (dev/`cargo run`); the in-app "Restart" button re-runs it
+dev-dash open prod  # same, but an optimized release build (no Restart button)
 ```
 
-The **Restart** button (nav footer, under Refresh) exits with a sentinel code that
-`dev-dash open` catches to rebuild and relaunch (prod) or re-run (dev) — handy for picking up
-code changes without leaving the app.
+In dev/debug builds the **Restart** button (nav footer, under Refresh) exits with a sentinel code
+that `dev-dash open` catches to re-run (dev) or rebuild + relaunch (`prod`) — handy for picking up
+code changes without leaving the app. **Release builds compile the button out entirely** (a
+release/Finder launch has no relaunch loop to catch the code).
 
 ### Sandbox database & migrations
 

@@ -12,7 +12,9 @@
 #     launches apps with cwd=/, but the app loads its `.env` via dotenvy from the working
 #     directory. So the launcher cd's into the bundle (Contents/Resources, where we copy the
 #     `.env`) before running the symlinked binary — that's how `.env` is found.
-#   * The launcher honors the in-app Restart (exit 86), relaunching just like `dev-dash open`.
+#   * The launcher does NOT loop on the in-app Restart (exit 86): in a Finder-launched bundle
+#     the relaunch doesn't work, so Restart just quits. Restart-relaunch stays a `dev-dash open`
+#     (dev) feature only. The launcher only cd's for `.env` and execs the binary.
 #   * We copy the repo's `.env` into the bundle so it is self-contained w.r.t. config.
 set -euo pipefail
 
@@ -26,10 +28,6 @@ BIN_NAME="$(grep -m1 '^name' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
 VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
 RELEASE_BIN="$REPO_ROOT/target/release/$BIN_NAME"
 ICNS_SRC="$REPO_ROOT/static/assets/icon/AppIcon.icns"
-
-# The in-app "Restart" button exits with this code; the launcher loop below relaunches on it.
-# MUST match RESTART_EXIT_CODE in src/main.rs (and `restart_code` in dev-dash).
-RESTART_CODE=86
 
 APP_NAME="DevDashboard"
 OUT_DIR="$REPO_ROOT/builds/macos"
@@ -100,16 +98,15 @@ else
 fi
 
 # 5. Launcher script = the bundle's CFBundleExecutable. It resolves its own location, cd's into
-#    Contents/Resources (where `.env` lives) so dotenvy finds config, then runs the symlinked
-#    binary in a loop that relaunches on the Restart exit code (86). Finder launches with cwd=/,
-#    so the cd is what makes `.env` load correctly. We relaunch (rather than rebuild like
-#    `dev-dash open` prod) because a Finder-launched app has a minimal PATH and can't rely on
-#    `cargo`; the symlink means any external rebuild is picked up on the next relaunch anyway.
-#    Placeholders below are substituted after the (quoted) heredoc so the body stays literal.
+#    Contents/Resources (where `.env` lives) so dotenvy finds config, then execs the symlinked
+#    binary. Finder launches with cwd=/, so the cd is what makes `.env` load correctly. It does
+#    NOT loop on the Restart exit code (86): relaunch doesn't work in a Finder-launched bundle,
+#    so Restart simply quits here (that stays a `dev-dash open` dev feature). The symlink means
+#    an external `cargo build --release` is still picked up on the next launch.
+#    The placeholder below is substituted after the (quoted) heredoc so the body stays literal.
 cat > "$MACOS_DIR/$APP_NAME" <<'LAUNCH'
 #!/usr/bin/env bash
-# NOTE: no `set -e` — we intentionally inspect the binary's non-zero exit codes.
-set -uo pipefail
+set -euo pipefail
 
 # Resolve this launcher's real directory (Contents/MacOS), following any symlinks.
 SOURCE="${BASH_SOURCE[0]}"
@@ -123,21 +120,11 @@ HERE=$( cd -- "$( dirname -- "$SOURCE" )" &>/dev/null && pwd )
 # cd into the bundle's Resources dir, which holds the copied `.env`, so dotenvy loads it.
 cd "$HERE/../Resources"
 
-BIN="$HERE/__BIN_NAME__"
-RESTART_CODE=__RESTART_CODE__
-
-# Run the app; on the in-app Restart (exit 86) relaunch, otherwise exit with its code.
-while true; do
-  "$BIN" "$@"
-  code=$?
-  [ "$code" -eq "$RESTART_CODE" ] || exit "$code"
-done
+# Run the app, replacing this launcher process (no relaunch loop — Restart just quits).
+exec "$HERE/__BIN_NAME__" "$@"
 LAUNCH
-# Substitute the real binary name + restart code into the launcher.
-sed -i '' \
-  -e "s/__BIN_NAME__/$BIN_NAME/" \
-  -e "s/__RESTART_CODE__/$RESTART_CODE/" \
-  "$MACOS_DIR/$APP_NAME"
+# Substitute the real binary name into the launcher.
+sed -i '' -e "s/__BIN_NAME__/$BIN_NAME/" "$MACOS_DIR/$APP_NAME"
 chmod +x "$MACOS_DIR/$APP_NAME"
 
 # 6. Copy the repo's `.env` into the bundle so it carries its own config.
