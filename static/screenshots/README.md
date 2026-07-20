@@ -82,12 +82,18 @@ Local repositories + their git worktrees.
 
 | View | `DEV_VIEW` |
 |------|-----------|
-| Projects grid (up-to-date / out-of-sync / no-origin cards) | `projects` |
+| Projects grid (pullable / up-to-date / out-of-sync / no-origin cards) | `projects` |
 | Empty projects | `projects-empty` |
+| Projects grid mid git-status refresh (spinners) | `projects-loading` |
+| Projects grid with a one-click Pull in flight ("Pulling…") | `projects-pulling` |
+| Add-project modal (folder picker + name) | `add-project` |
 | Project detail (metadata + live + removed worktrees) | `project` |
 
 ![projects](projects/projects.png)
 ![projects-empty](projects/projects-empty.png)
+![projects-loading](projects/projects-loading.png)
+![projects-pulling](projects/projects-pulling.png)
+![add-project](projects/add-project.png)
 ![project](projects/project.png)
 
 ## shell

@@ -44,7 +44,8 @@ allowlisted (it will prompt) — use the wrapper.
 
 `VIEW` ∈ `onboarding · new-profile · profile-select · board · board-empty · ticket · page ·
 create · stage-edit · confirm-delete · notes · notes-empty · notes-file · todos · todos-empty ·
-projects · projects-empty · projects-loading · add-project · project · loading · error` (defined
+projects · projects-empty · projects-loading · projects-pulling · add-project · project · loading ·
+error` (defined
 in `ui/dev.rs`; see §8). Every one has a committed screenshot under `static/screenshots/` (§11).
 **Never edit `dev-dash` itself** (trust boundary, §6).
 
@@ -390,15 +391,20 @@ variant for a distinct cause.
 ### The `dev-dash` wrapper (build + screenshots)
 
 `./dev-dash` is the trusted, pre-approved entry point for building and for the whole
-build → launch → raise → capture → kill screenshot dance (it handles the macOS gotchas: the
-window opens behind others and needs Screen Recording + Accessibility permission; `sleep` is
-blocked so it uses `perl` timing). Prefer it over hand-rolling `screencapture`. **Both `shot`
-and `snap` capture ONLY the app window — never the macOS menu bar (top) or dock (bottom), which
-can leak other apps/notifications (opsec).** They do this by resolving the app's window id via
-`static/scripts/window-id.swift` (a CoreGraphics window-list lookup — needs only Screen Recording,
-NOT Accessibility) and handing it to `screencapture -o -l`, so the drop shadow is dropped too and
-the frame is a clean window rectangle. If the window can't be found it warns and falls back to a
-full-screen grab, so a capture never silently produces nothing.
+build → launch → capture → kill screenshot dance (it handles the macOS gotchas: `sleep` is blocked
+so it uses `perl` timing). Prefer it over hand-rolling `screencapture`. **Both `shot` and `snap`
+capture ONLY the app window — never the macOS menu bar (top) or dock (bottom), which can leak other
+apps/notifications (opsec).** They do this by resolving the app's window id via
+`static/scripts/window-id.swift` (a CoreGraphics window-list lookup) and handing it to
+`screencapture -o -l`, so the drop shadow is dropped too and the frame is a clean window rectangle.
+Because `-l <id>` grabs the window's own image even when it's occluded, **no window-raising is
+needed** — so this path needs only **Screen Recording** permission, NOT Accessibility.
+**`shot` vs. `snap` target the right window by TITLE (opsec):** a `DEV_VIEW` run titles its window
+`Dev Dashboard [DEV: <view>]` (set in `main.rs`), the live app is plain `Dev Dashboard`;
+`window-id.swift` takes a `dev`|`live` arg so `shot` (dev) captures only the mock and `snap` (live)
+only the running app — a mock shot can't leak the owner's live data and a live snap can't grab a
+stray mock, even with both on screen at once. If no matching window is found it warns and falls back
+to a full-screen grab, so a capture never silently produces nothing.
 
 ```bash
 ./dev-dash build                                  # compile (allowlisted; use instead of cargo build)
@@ -415,7 +421,7 @@ normal close) ends the loop. Keep the `86` in `dev-dash`'s `open` loop in sync w
 
 > **`dev-dash` is a trust boundary — do not edit it casually.** `.claude/settings.json`
 > allowlists `Bash(./dev-dash:*)` to run without prompting, and `dev-dash` internally runs
-> `osascript`/`screencapture`/`pkill`/`perl` (none individually allowlisted). Because running it
+> `swift`/`screencapture`/`pkill`/`perl` (none individually allowlisted). Because running it
 > is auto-approved, **editing it is deliberately gated**: the settings `ask` rules force a
 > confirmation prompt on `Edit(dev-dash)`/`Write(dev-dash)` even under auto-accept. Never remove
 > that guard or widen the allowlist to the underlying system tools to "simplify" things.
@@ -486,8 +492,9 @@ detail-view change).
 > **"Look at my app" is a protocol.** When the owner says *look at my app / see what I'm
 > seeing / take a screenshot of what's open*, they mean the **already-running** instance with
 > their real data — screenshot it with `./dev-dash snap [OUT]` (default `static/tmp/screenshots/live.png`)
-> and Read it. Unlike `shot`, `snap` does NOT build, launch, or close anything; it just raises
-> and captures the live window. (Errors if the app isn't running — tell them to `dev-dash open`.)
+> and Read it. Unlike `shot`, `snap` does NOT build, launch, or close anything; it just captures
+> the live window (matched by its plain `Dev Dashboard` title, so a stray `DEV_VIEW` mock is never
+> grabbed). (Errors if the app isn't running — tell them to `dev-dash open`.)
 
 **`DEV_VIEW` screens** (in `ui/dev.rs`): the app injects mock in-memory state — no DB, no
 seeding — so a screen renders instantly and works with the DB down; while set, worker snapshots
@@ -513,6 +520,7 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 | `projects`       | Projects tab: card grid (up-to-date / out-of-sync / no-origin states) |
 | `projects-empty` | Projects tab with no projects (empty state) |
 | `projects-loading` | Projects tab mid-refresh — cards + header show the git-status spinner |
+| `projects-pulling` | Projects tab with a one-click Pull in flight — the card's "Pulling…" spinner |
 | `add-project`    | The "add project" modal over the grid (native folder picker + name) |
 | `project`        | A project's full-page detail (metadata + live + removed worktrees) |
 | `loading`        | The pre-first-snapshot loading screen (spinner before any data arrives) |
@@ -608,8 +616,9 @@ app feels slow. Instead:
   emits the DB snapshot immediately (git fills in a moment later); (2) on demand — the
   **"Refresh git"** button on the Projects grid + project detail page → `projects::Event::refresh_status()`
   → `project::Command::RefreshStatus`; (3) after **create project**, so a newly-added repo's status
-  loads. Nothing else fetches. (The global nav "Refresh"/`ReloadAll` reloads the DB + reads the git
-  cache; it does NOT refetch git.)
+  loads; (4) after a **Pull** (below), which refetches just that one project's path inline (via
+  `refresh_statuses`, not the background `spawn_git_refresh`). Nothing else fetches. (The global nav
+  "Refresh"/`ReloadAll` reloads the DB + reads the git cache; it does NOT refetch git.)
 - **The UI shows load/checked state, never implies "live".** While `refreshing`, the grid header,
   each card's badge, and the detail page show a spinner. Otherwise the grid header shows
   "Checked HH:MM" (most recent `checked_at`) and the detail page shows it per project;
@@ -622,9 +631,21 @@ Status reads stay **best-effort**: a non-repo / missing remote / failed fetch de
 fields and NEVER fail the snapshot; a failed fetch falls back to local refs and flags
 `fetched = false`. "Up to date" = real repo + clean + in sync with upstream.
 
-**Git is the only tool; the owner drives history.** Committing / pushing / pulling are done by
-the owner **by hand** — the app never runs them, so the exact commands stay theirs. The app only
-reads status and manages worktrees. Assume SSH keys are loaded by the time the app runs.
+**Git is the only tool; the owner drives history.** Committing / pushing are done by the owner
+**by hand** — the app never runs them, so the exact commands stay theirs. The app reads status,
+manages worktrees, and offers **one** constrained history-changing action (below). Assume SSH keys
+are loaded by the time the app runs.
+
+**One-click Pull (the single exception).** On the **Projects view only**, a project whose current
+branch is a shared integration branch (**`main`/`develop`**) and is **behind its upstream** with a
+**clean** working tree gets a **Pull** button (grid card header, left of the git badge; and the
+detail page header). It runs exactly `git pull --rebase origin <branch>` (`git::pull_rebase`) then
+refetches **only that project's** status (`ProjectService::pull` → `project::Command::Pull`, settled
+like a worktree op). The gate is `GitStatus::can_pull` (domain), and the service re-reads the branch
+live and refuses anything but `main`/`develop` (`ProjectError::NotPullable`) so a stale card can't
+drive a pull on a feature branch. Feature branches, dirty trees, and push/commit stay manual — the
+owner drives those. A dirty tree makes `--rebase` refuse; that surfaces as a `ProcessError`, nothing
+is silently rewritten. This is the ONLY place the app rewrites/advances refs.
 
 **Worktrees.** A worktree lives at **`{repo}/.github/worktrees/{name}`** (the path convention —
 never deviate) and is tied **1:1 to a ticket** within a project:
@@ -682,7 +703,7 @@ tables + inline thumbnails); regenerate/extend it alongside the images.
 | `tasks/`    | `board`, `board-empty`, `ticket`, `page`, `create`, `stage-edit` |
 | `notes/`    | `notes`, `notes-empty`, `notes-file` |
 | `todos/`    | `todos`, `todos-empty` |
-| `projects/` | `projects`, `projects-empty`, `projects-loading`, `add-project`, `project` |
+| `projects/` | `projects`, `projects-empty`, `projects-loading`, `projects-pulling`, `add-project`, `project` |
 | `shell/`    | `error`, `loading`, `confirm-delete` (cross-cutting, not tied to a tab) |
 
 **The invariant (must always hold):**

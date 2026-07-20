@@ -35,6 +35,22 @@ pub fn primary_enabled(ui: &mut Ui, label: &str, enabled: bool) -> Response {
     }
 }
 
+/// Compact accent pill for an inline, in-card call to action (e.g. a project card's Pull
+/// button). Smaller text + tighter padding than [`primary`] so it sits neatly beside labels and
+/// badges rather than towering over them.
+pub fn compact_primary(ui: &mut Ui, label: &str) -> Response {
+    let p = theme::palette();
+    let restore = ui.spacing().button_padding;
+    ui.spacing_mut().button_padding = egui::vec2(10.0, 3.0);
+    let response = ui.add(
+        Button::new(RichText::new(label).size(12.5).strong().color(p.on_accent))
+            .fill(p.accent)
+            .corner_radius(CornerRadius::same(theme::radius::BUTTON)),
+    );
+    ui.spacing_mut().button_padding = restore;
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// Neutral filled button for secondary actions (e.g. Cancel).
 pub fn secondary(ui: &mut Ui, label: &str) -> Response {
     let p = theme::palette();

@@ -167,11 +167,14 @@ other platforms even before you touch that call.
 
 - `dev-dash build`, `db …`, `sandbox …`, and `open` are portable shell + `cargo` + Docker — they
   work anywhere the prerequisites do.
-- `dev-dash shot` and `dev-dash snap` are **macOS-only**: they use `osascript` (raise the window),
-  a small `static/scripts/window-id.swift` CoreGraphics helper (find the app window's id) +
-  `screencapture -o -l` (capture just that window — never the menu bar or dock), plus `pkill`/`perl`
-  for process + timing control. A port would swap these for the platform's equivalents (e.g.
-  `wmctrl`/`xdotool` + `import`/`grim` on Linux).
+- `dev-dash shot` and `dev-dash snap` are **macOS-only**: a small `static/scripts/window-id.swift`
+  CoreGraphics helper finds the app window's id **by title** (a `DEV_VIEW` mock is titled
+  `Dev Dashboard [DEV: …]`, the live app plain `Dev Dashboard`, so a mock `shot` and a live `snap`
+  never grab each other's window), and `screencapture -o -l` captures just that window — never the
+  menu bar or dock. Because `-l <id>` grabs the window's own image even when it's occluded, no
+  window-raising is needed, so these need only **Screen Recording** permission (not Accessibility).
+  `pkill`/`perl` handle process + timing control. A port would swap these for the platform's
+  equivalents (e.g. `wmctrl`/`xdotool` + `import`/`grim` on Linux).
 
 ## Troubleshooting
 

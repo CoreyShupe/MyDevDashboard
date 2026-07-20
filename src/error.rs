@@ -119,6 +119,11 @@ pub enum ProjectError {
 
     #[error("worktree `{id}` was not found")]
     WorktreeMissing { id: String },
+
+    #[error(
+        "`{path}` can't be pulled from here — the one-click pull only runs on a shared `main`/`develop` branch. Pull it yourself for anything else"
+    )]
+    NotPullable { path: String },
 }
 
 /// An external command we shelled out to (git, or the editor launcher) failed. Kept separate

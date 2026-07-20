@@ -84,6 +84,7 @@ pub mod icon {
     pub const PATH: char = '\u{e2c8}'; // folder_open (repository path)
     pub const CHECK: char = '\u{e86c}'; // check_circle (git: up to date)
     pub const SYNC: char = '\u{e627}'; // sync (git: ahead/behind/dirty)
+    pub const PULL: char = '\u{e2c4}'; // file_download (git: pull latest on a shared branch)
 }
 
 /// Corner radii (px). Bubbly = generous.

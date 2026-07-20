@@ -1,7 +1,7 @@
 //! `projects::project` part — business logic. Owns DB access for the `projects` table, plus
 //! the live git-status reads that enrich each project (delegated to [`super::git`]).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -29,6 +29,12 @@ pub struct ProjectService {
     /// loading state; a CAS guard (see [`begin_refresh`](Self::begin_refresh)) keeps concurrent
     /// refreshes from piling up. `Arc` so all `Backend` clones observe the same flag.
     refreshing: Arc<AtomicBool>,
+    /// Projects with a `git pull --rebase` currently in flight, by id. Its own guard (separate
+    /// from `refreshing`, which is git-status fetches) so a pull's loading state can't be confused
+    /// with a refresh, and — critically — so a second Pull click on the same project while one is
+    /// running is refused at the source ([`begin_pull`](Self::begin_pull)): never two concurrent
+    /// pulls on one repo. Surfaced per-card in the `View`. `Arc` so all `Backend` clones share it.
+    pulling: Arc<Mutex<HashSet<Uuid>>>,
 }
 
 impl ProjectService {
@@ -37,6 +43,7 @@ impl ProjectService {
             pool,
             status_cache: Arc::new(Mutex::new(HashMap::new())),
             refreshing: Arc::new(AtomicBool::new(false)),
+            pulling: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -107,6 +114,67 @@ impl ProjectService {
             }
             .into()
         })
+    }
+
+    /// One-click **Pull** for a project: `git pull --rebase origin <branch>`, then refetch ONLY
+    /// this project's git status into the cache (AGENTS.md §10 — the owner asked to pull this repo
+    /// specifically, so we don't re-fetch the whole grid). Guarded here, not just in the UI: the
+    /// branch is re-read live and refused unless it's a shared branch (`main`/`develop`), so a
+    /// stale card can't drive a pull on a feature branch.
+    pub async fn pull(&self, id: Uuid) -> Result<(), AppError> {
+        let path = self.path_of(id).await?;
+        let branch = git::current_branch(&path)
+            .await
+            .filter(|b| GitStatus::is_pullable_branch(b))
+            .ok_or_else(|| ProjectError::NotPullable { path: path.clone() })?;
+        git::pull_rebase(&path, &branch).await?;
+        // Refetch just this repo so its card reflects the post-pull state (in sync, clean).
+        self.refresh_statuses(vec![path]).await;
+        Ok(())
+    }
+
+    /// Try to claim the "pulling" guard for a project. Returns `true` if this call started the
+    /// pull, or `false` if one was already in flight for that project — so callers skip spawning a
+    /// duplicate `git pull --rebase` on the same repo (the system-level dedupe).
+    pub fn begin_pull(&self, id: Uuid) -> bool {
+        self.lock_pulling().insert(id)
+    }
+
+    /// Release a project's "pulling" guard once its pull finishes (success or failure).
+    pub fn end_pull(&self, id: Uuid) {
+        self.lock_pulling().remove(&id);
+    }
+
+    /// The set of projects with a pull in flight (drives each card's pulling state in the `View`).
+    pub fn pulling_ids(&self) -> HashSet<Uuid> {
+        self.lock_pulling().clone()
+    }
+
+    /// Lock the pulling set, recovering a poisoned guard (a poisoned mutex must not crash the app
+    /// — §3 bans `unwrap`/`expect`), same policy as [`lock_cache`](Self::lock_cache).
+    fn lock_pulling(&self) -> std::sync::MutexGuard<'_, HashSet<Uuid>> {
+        self.pulling
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A project's repository path on disk, or a typed "not found" if the row is gone.
+    async fn path_of(&self, id: Uuid) -> Result<String, AppError> {
+        sqlx::query_scalar::<_, String>("SELECT path FROM projects WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|source| DbError::Query {
+                context: "load project path",
+                source,
+            })?
+            .ok_or_else(|| {
+                DbError::NotFound {
+                    entity: "project",
+                    id: id.to_string(),
+                }
+                .into()
+            })
     }
 
     /// Hard-delete a project (its worktree rows cascade). The on-disk repo is untouched — we

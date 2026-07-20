@@ -21,8 +21,9 @@
 #     dev-dash shot VIEW OUT    Screenshot a DEV_VIEW to OUT.png, then exit the app.
 #                               VIEW = onboarding|new-profile|board|ticket|page|create|
 #                                      notes|notes-file|error (see ui::dev).
-#                               Encapsulates the whole build->launch->raise->capture->kill
-#                               flow so only this one script needs to be trusted.
+#                               Encapsulates the whole build->launch->capture->kill flow
+#                               (captures the mock window by id+title) so only this one
+#                               script needs to be trusted.
 #     dev-dash snap [OUT]       Screenshot the ALREADY-RUNNING app to OUT (default
 #                               static/tmp/screenshots/live.png). Does NOT build, launch, or close it
 #                               — use it to see the live app with the owner's real data.
@@ -49,14 +50,18 @@ usage() {
 # Capture ONLY the app window to OUT — never the macOS menu bar (top) or dock (bottom), which
 # can leak other apps / notifications (opsec). `static/scripts/window-id.swift` looks up the app's
 # on-screen window id via CoreGraphics; we hand it to `screencapture -l` so only that window's
-# pixels are grabbed. `-o` drops the window's drop shadow for clean edges. This path needs only
-# Screen Recording permission (same as any screencapture) — NOT Accessibility — because a window
-# list + bounds are readable without it. Falls back to a full-screen grab (with a warning) if the
-# window can't be found, so a capture never silently produces nothing.
+# pixels are grabbed. Because `-l <id>` grabs the window's OWN image, it works even when the
+# window is occluded or not frontmost — so there's no need to raise it first (which is why this
+# whole path needs only Screen Recording, never Accessibility). `-o` drops the drop shadow for
+# clean edges. The 2nd arg (`dev`|`live`) picks WHICH window by title: a DEV_VIEW mock is titled
+# "Dev Dashboard [DEV: …]", the live app plain "Dev Dashboard", so `shot` (dev) and `snap` (live)
+# can never grab each other's window even when both are on screen. Falls back to a full-screen
+# grab (with a warning) if the window can't be found, so a capture never silently produces nothing.
 capture_window() {
   local out="$1"
+  local mode="${2:-live}"
   local winid
-  winid=$(/usr/bin/swift "$SCRIPT_DIR/static/scripts/window-id.swift" 2>/dev/null || true)
+  winid=$(/usr/bin/swift "$SCRIPT_DIR/static/scripts/window-id.swift" "$mode" 2>/dev/null || true)
   if [[ "$winid" =~ ^[0-9]+$ ]]; then
     screencapture -x -o -l"$winid" "$out"
   else
@@ -144,11 +149,11 @@ case "$cmd" in
     bin="$SCRIPT_DIR/target/debug/$(grep -m1 '^name' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
     pkill -f "$bin" 2>/dev/null || true
     DEV_VIEW="$view" RUST_LOG=warn "$bin" >/dev/null 2>&1 &
-    # Wait for the window, raise it to the front, capture, then exit the app.
+    # Wait for the window to appear, then capture it BY ID (screencapture -l grabs the window's
+    # own image even when it isn't frontmost/occluded — no raise needed). Match the DEV window by
+    # title (mode "dev") so a running live app is never captured into a mock shot.
     perl -e 'select(undef,undef,undef,4)'
-    osascript -e 'tell application "System Events" to set frontmost of (every process whose name contains "dev-dashboard") to true' 2>/dev/null || true
-    perl -e 'select(undef,undef,undef,1.5)'
-    capture_window "$out"
+    capture_window "$out" "dev"
     pkill -f "$bin" 2>/dev/null || true
     echo "dev-dash: captured $view -> $out"
     exit 0
@@ -164,9 +169,9 @@ case "$cmd" in
       exit 1
     fi
     mkdir -p "$(dirname "$out")"
-    osascript -e 'tell application "System Events" to set frontmost of (every process whose name contains "dev-dashboard") to true' 2>/dev/null || true
-    perl -e 'select(undef,undef,undef,1)'
-    capture_window "$out"
+    # Capture the LIVE window by id (title-matched "live"); screencapture -l grabs it even when
+    # it's behind other windows, so no raise (and no Accessibility) is needed.
+    capture_window "$out" "live"
     echo "dev-dash: captured live app -> $out"
     exit 0
     ;;

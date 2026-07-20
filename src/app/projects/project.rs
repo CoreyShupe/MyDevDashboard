@@ -14,6 +14,9 @@ pub enum Command {
     Delete { id: Uuid },
     /// Refetch live git status for the active profile's projects (AGENTS.md §10).
     RefreshStatus,
+    /// `git pull --rebase origin <branch>` for one project on a shared branch, then refetch just
+    /// that project's status (AGENTS.md §10).
+    Pull { id: Uuid },
 }
 
 impl Command {
@@ -25,6 +28,9 @@ impl Command {
     }
     pub fn refresh_status() -> Self {
         Self::RefreshStatus
+    }
+    pub fn pull(id: Uuid) -> Self {
+        Self::Pull { id }
     }
 }
 
@@ -61,6 +67,13 @@ pub async fn handle(backend: &Backend, emitter: &Emitter, cmd: Command) {
         // its loading state; the spawned fetch emits the settled snapshot when it lands.
         Command::RefreshStatus => {
             crate::app::projects::spawn_git_refresh(backend, emitter);
+            emitter.snapshot(backend).await;
+        }
+        // Pull is network-bound, so spawn it off the loop (like a git refresh) with a per-project
+        // guard against concurrent/duplicate pulls, then snapshot now so the card shows its pulling
+        // spinner immediately; the spawned task settles (synced card, or the error) when it lands.
+        Command::Pull { id } => {
+            crate::app::projects::spawn_pull(backend, emitter, id);
             emitter.snapshot(backend).await;
         }
     }

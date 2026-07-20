@@ -153,6 +153,15 @@ impl DashboardApp {
                 self.data = Rc::new(data);
                 self.active_tab = Tab::Projects;
             }
+            dev::DevView::ProjectsPulling => {
+                let mut data = dev::mock_board();
+                // A one-click Pull in flight on the pullable card → its "Pulling…" spinner shows.
+                if let Some(card) = data.projects.projects.first_mut() {
+                    card.pulling = true;
+                }
+                self.data = Rc::new(data);
+                self.active_tab = Tab::Projects;
+            }
             dev::DevView::Loading => self.loaded = false, // show the pre-snapshot loading screen
             dev::DevView::AddProject => {
                 self.data = Rc::new(dev::mock_board());

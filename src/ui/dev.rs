@@ -45,6 +45,8 @@ pub enum DevView {
     Projects,
     /// The Projects tab mid-refresh: cards + header show the git-status loading spinner.
     ProjectsLoading,
+    /// The Projects tab with a one-click Pull in flight on a card (its "Pulling…" spinner).
+    ProjectsPulling,
     /// The pre-first-snapshot loading screen (shown before any data arrives).
     Loading,
     /// The "add project" modal, open over the Projects grid (folder picker + name).
@@ -78,6 +80,7 @@ impl DevView {
             "notes-file" => Some(Self::NotesFile),
             "projects" => Some(Self::Projects),
             "projects-loading" => Some(Self::ProjectsLoading),
+            "projects-pulling" => Some(Self::ProjectsPulling),
             "loading" => Some(Self::Loading),
             "add-project" => Some(Self::AddProject),
             "project" => Some(Self::Project),
@@ -230,9 +233,11 @@ pub fn mock_board() -> ViewData {
         updated_at: now,
     };
     let dashboard = project("my-dev-dashboard", "/Users/you/Programming/MyDevDashboard");
+    let webapp = project("acme-web", "/Users/you/Programming/acme-web");
     let api = project("acme-api", "/Users/you/Programming/acme-api");
     let scratch = project("scratchpad", "/Users/you/Programming/scratchpad");
     let projects_cards = vec![
+        // Shared branch (main) that's behind & clean → the one-click Pull button shows (§10).
         ProjectCard {
             project: dashboard.clone(),
             git: GitStatus {
@@ -242,10 +247,27 @@ pub fn mock_board() -> ViewData {
                 clean: true,
                 has_upstream: true,
                 ahead: 0,
+                behind: 2,
+                fetched: true,
+                checked_at: Some(now),
+            },
+            pulling: false,
+        },
+        // A repo fully up to date (no Pull offered).
+        ProjectCard {
+            project: webapp.clone(),
+            git: GitStatus {
+                is_repo: true,
+                origin_url: Some("git@github.com:acme/acme-web.git".to_owned()),
+                branch: Some("main".to_owned()),
+                clean: true,
+                has_upstream: true,
+                ahead: 0,
                 behind: 0,
                 fetched: true,
                 checked_at: Some(now),
             },
+            pulling: false,
         },
         ProjectCard {
             project: api.clone(),
@@ -260,6 +282,7 @@ pub fn mock_board() -> ViewData {
                 fetched: true,
                 checked_at: Some(now),
             },
+            pulling: false,
         },
         ProjectCard {
             project: scratch.clone(),
@@ -274,6 +297,7 @@ pub fn mock_board() -> ViewData {
                 fetched: false,
                 checked_at: Some(now),
             },
+            pulling: false,
         },
     ];
     let worktree = |project_id, ticket_id, name: &str, branch: &str, removed: bool| Worktree {

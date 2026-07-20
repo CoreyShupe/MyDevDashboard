@@ -10,9 +10,12 @@
 //!   [`open_in_vscode`] return a typed [`ProcessError`] the UI shows in a modal, because the
 //!   owner asked for the action and needs to know precisely why it didn't happen.
 //!
-//! Committing / pushing / pulling are deliberately NOT here — the owner runs those by hand so
-//! the exact commands are theirs to control (AGENTS.md §10). We only read state and manage
-//! worktrees. SSH keys are assumed loaded by the time the app runs.
+//! Committing / pushing are deliberately NOT here — the owner runs those by hand so the exact
+//! commands are theirs to control (AGENTS.md §10). The ONE exception is a constrained
+//! [`pull_rebase`]: a `git pull --rebase origin <branch>` offered only on the shared branches
+//! (`main`/`develop`) that are behind — a safe fast-forward the owner shouldn't have to leave the
+//! app for. We otherwise only read state and manage worktrees. SSH keys are assumed loaded by the
+//! time the app runs.
 
 use std::path::Path;
 use std::time::Duration;
@@ -100,6 +103,31 @@ pub async fn status(path: &str) -> GitStatus {
         // itself doesn't know the wall-clock time, and keeping it here avoids a `Utc::now` per repo.
         checked_at: None,
     }
+}
+
+/// The currently checked-out branch (`None` when detached / not a repo). A cheap, local read —
+/// no `git fetch` — used to gate the one-click pull on the real current branch.
+pub async fn current_branch(path: &str) -> Option<String> {
+    read(path, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .await
+        .filter(|b| b != "HEAD")
+}
+
+/// Run `git pull --rebase origin <branch>` in `repo`. An explicit, owner-requested action, so it
+/// surfaces a typed [`ProcessError`] on failure (unlike best-effort status reads). Only ever
+/// invoked for the shared branches gated by [`crate::domain::projects::GitStatus::can_pull`]; a
+/// dirty tree or a diverged history makes git refuse, and that refusal surfaces so nothing is
+/// silently rewritten (AGENTS.md §10).
+pub async fn pull_rebase(repo: &str, branch: &str) -> Result<(), ProcessError> {
+    let args = vec![
+        "-C".to_owned(),
+        repo.to_owned(),
+        "pull".to_owned(),
+        "--rebase".to_owned(),
+        "origin".to_owned(),
+        branch.to_owned(),
+    ];
+    run(&args, "pulling the latest changes").await.map(|_| ())
 }
 
 /// Whether a local branch already exists in the repo (drives `-b` vs. plain checkout on add).

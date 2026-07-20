@@ -69,9 +69,18 @@ fn main() -> eframe::Result<()> {
     };
     let handle = runtime.handle().clone();
 
+    // A DEV_VIEW run shows a mock (never the owner's real data), so give its window a distinct
+    // title. `dev-dash shot` (mock) and `dev-dash snap` (the live app) match on this title via
+    // `static/scripts/window-id.swift`, so a capture can never grab the wrong window — a mock shot
+    // can't leak the live app's data, and a live snap can't grab a stray mock (opsec, AGENTS §8).
+    let window_title = match std::env::var("DEV_VIEW") {
+        Ok(view) if !view.trim().is_empty() => format!("Dev Dashboard [DEV: {}]", view.trim()),
+        _ => "Dev Dashboard".to_owned(),
+    };
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Dev Dashboard")
+            .with_title(&window_title)
             // Open maximized — the bubbly, spacious design is built for a large canvas.
             .with_maximized(true)
             .with_inner_size([1100.0, 720.0])

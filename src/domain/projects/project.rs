@@ -47,9 +47,30 @@ pub struct GitStatus {
 }
 
 impl GitStatus {
+    /// The shared integration branches on which the app offers a one-click **Pull**. Everything
+    /// else (feature branches) stays the owner's to drive by hand (AGENTS.md §10).
+    pub const PULLABLE_BRANCHES: [&'static str; 2] = ["main", "develop"];
+
     /// "Up to date" = a real repo, a clean working tree, and in sync with the upstream (or no
     /// upstream to compare against). This is what the card's up-to-date badge reflects.
     pub fn up_to_date(&self) -> bool {
         self.is_repo && self.clean && self.ahead == 0 && self.behind == 0
+    }
+
+    /// Whether `branch` is one of the shared branches a one-click Pull is offered on.
+    pub fn is_pullable_branch(branch: &str) -> bool {
+        Self::PULLABLE_BRANCHES.contains(&branch)
+    }
+
+    /// Whether to offer the one-click **Pull** action (`git pull --rebase origin <branch>`): a
+    /// real repo on a shared branch (`main`/`develop`) that tracks an upstream, is behind it, and
+    /// has a clean working tree so the rebase won't be refused. Feature branches, dirty trees, or
+    /// nothing-to-pull all fall outside this — the owner drives those by hand (AGENTS.md §10).
+    pub fn can_pull(&self) -> bool {
+        self.is_repo
+            && self.clean
+            && self.has_upstream
+            && self.behind > 0
+            && self.branch.as_deref().is_some_and(Self::is_pullable_branch)
     }
 }

@@ -54,6 +54,9 @@ impl Event {
     pub fn refresh_status() -> Self {
         Self::Project(project::Command::refresh_status())
     }
+    pub fn pull_project(id: Uuid) -> Self {
+        Self::Project(project::Command::pull(id))
+    }
 }
 
 /// One project as the grid renders it: the stored project plus its live git status.
@@ -61,6 +64,9 @@ impl Event {
 pub struct ProjectCard {
     pub project: Project,
     pub git: GitStatus,
+    /// Whether a `git pull --rebase` is currently in flight for this project — the card shows a
+    /// pulling spinner in place of its Pull button while true (AGENTS.md §10).
+    pub pulling: bool,
 }
 
 /// The projects feature's slice of the rendered snapshot.
@@ -86,10 +92,18 @@ impl View {
         // Read the cached git status (refreshed on open + on demand) — never a fetch, so building
         // a snapshot after any mutation stays instant (AGENTS.md §10).
         let statuses = service.project.cached_statuses(&paths);
+        let pulling = service.project.pulling_ids();
         let projects = projects
             .into_iter()
             .zip(statuses)
-            .map(|(project, git)| ProjectCard { project, git })
+            .map(|(project, git)| {
+                let pulling = pulling.contains(&project.id);
+                ProjectCard {
+                    project,
+                    git,
+                    pulling,
+                }
+            })
             .collect();
 
         let worktrees = service.worktree.list_for_profile(profile_id).await?;
@@ -145,6 +159,26 @@ pub fn spawn_git_refresh(backend: &Backend, emitter: &Emitter) {
         }
         backend.projects.project.end_refresh();
         emitter.snapshot(&backend).await;
+    });
+}
+
+/// Kick off a non-blocking one-click **Pull** for a project (AGENTS.md §10). Claims the
+/// per-project pulling guard first: a second click (or a queued duplicate) while one is in flight
+/// is a no-op, so there are never two concurrent `git pull --rebase` on the same repo. Spawns the
+/// (network-bound) pull off the worker's event loop — like [`spawn_git_refresh`] — so it never
+/// blocks the loop or the UI; `ProjectService::pull` also refetches just that project's status when
+/// it lands. When done it clears the guard and settles (fresh snapshot, or the error in a modal).
+/// The CALLER should snapshot right after calling this so the card shows its pulling state at once.
+pub fn spawn_pull(backend: &Backend, emitter: &Emitter, id: Uuid) {
+    if !backend.projects.project.begin_pull(id) {
+        return; // already pulling this project; its settle will carry the result
+    }
+    let backend = backend.clone();
+    let emitter = emitter.clone();
+    tokio::spawn(async move {
+        let result = backend.projects.project.pull(id).await;
+        backend.projects.project.end_pull(id);
+        emitter.settle(&backend, result).await;
     });
 }
 

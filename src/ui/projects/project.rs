@@ -99,8 +99,12 @@ impl ProjectsState {
                 ui.horizontal_wrapped(|ui| {
                     for c in &projects.projects {
                         let live = projects.live_count_for_project(c.project.id);
-                        if render_card(ui, c, live, projects.refreshing) {
-                            open = Some(c.project.id);
+                        match render_card(ui, c, live, projects.refreshing) {
+                            CardAction::Open => open = Some(c.project.id),
+                            CardAction::Pull => {
+                                bridge.send(crate::app::projects::Event::pull_project(c.project.id))
+                            }
+                            CardAction::None => {}
                         }
                     }
                 });
@@ -143,6 +147,18 @@ impl ProjectsState {
                     if button::ghost(ui, &format!("{} Refresh git", theme::icon::REFRESH)).clicked()
                     {
                         bridge.send(crate::app::projects::Event::refresh_status());
+                    }
+                    // Same one-click Pull as the card, for a shared branch that's behind (§10).
+                    if c.pulling {
+                        ui.add_space(6.0);
+                        pulling_indicator(ui);
+                    } else if !projects.refreshing && c.git.can_pull() {
+                        ui.add_space(6.0);
+                        if button::compact_primary(ui, &format!("{} Pull", theme::icon::PULL))
+                            .clicked()
+                        {
+                            bridge.send(crate::app::projects::Event::pull_project(id));
+                        }
                     }
                 });
                 ui.add_space(12.0);
@@ -301,16 +317,47 @@ impl ProjectsState {
     }
 }
 
-/// Render one project card. Returns true if the card was clicked (open its detail).
-fn render_card(ui: &mut egui::Ui, c: &ProjectCard, live_worktrees: usize, loading: bool) -> bool {
+/// What a click on a project card resolved to: open its detail, pull it, or nothing.
+enum CardAction {
+    None,
+    Open,
+    Pull,
+}
+
+/// Render one project card. Clicking anywhere opens the detail; clicking the (conditional) Pull
+/// button pulls instead.
+fn render_card(
+    ui: &mut egui::Ui,
+    c: &ProjectCard,
+    live_worktrees: usize,
+    loading: bool,
+) -> CardAction {
     let muted = theme::palette().muted;
 
+    // The Pull button (when shown) lives in the header, just left of the git badge; we grab its
+    // rect here so its click can be wired ON TOP of the whole-card open interaction below.
+    let mut pull_rect: Option<egui::Rect> = None;
     let response = card::card(ui, |ui| {
         ui.set_width(CARD_WIDTH);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&c.project.name).strong().size(16.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Right-to-left: the badge sits furthest right; a shared branch (main/develop)
+                // that's behind then gets a one-click Pull to its LEFT (§10). Hidden mid-refresh —
+                // the cached status it's judged from is about to change.
                 git_badge(ui, &c.git, loading);
+                if c.pulling {
+                    // A pull is in flight — show its own spinner, not the button, so it can't be
+                    // clicked again (the system guard also refuses duplicates) and its loading is
+                    // never confused with the git-status refresh spinner.
+                    ui.add_space(8.0);
+                    pulling_indicator(ui);
+                } else if !loading && c.git.can_pull() {
+                    ui.add_space(8.0);
+                    pull_rect = Some(
+                        button::compact_primary(ui, &format!("{} Pull", theme::icon::PULL)).rect,
+                    );
+                }
             });
         });
         ui.add_space(6.0);
@@ -331,13 +378,45 @@ fn render_card(ui: &mut egui::Ui, c: &ProjectCard, live_worktrees: usize, loadin
     })
     .response;
 
-    ui.interact(
-        response.rect,
-        egui::Id::new(("project_card", c.project.id)),
-        egui::Sense::click(),
-    )
-    .on_hover_cursor(egui::CursorIcon::PointingHand)
-    .clicked()
+    // Whole-card click opens the detail. Added FIRST so the Pull interaction (added last, hence on
+    // top) wins its own sub-rect — mirroring the ticket card's drag-handle-over-open layering.
+    let open = ui
+        .interact(
+            response.rect,
+            egui::Id::new(("project_card", c.project.id)),
+            egui::Sense::click(),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+
+    if let Some(rect) = pull_rect {
+        let pull = ui
+            .interact(
+                rect,
+                egui::Id::new(("project_pull", c.project.id)),
+                egui::Sense::click(),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if pull.clicked() {
+            return CardAction::Pull;
+        }
+    }
+    if open.clicked() {
+        CardAction::Open
+    } else {
+        CardAction::None
+    }
+}
+
+/// The in-flight "Pulling…" indicator shown where the Pull button would be (card header + detail
+/// header) while a `git pull --rebase` runs. A self-contained left-to-right group so it renders
+/// the same inside a right-to-left card header as it does in the left-to-right detail header.
+fn pulling_indicator(ui: &mut egui::Ui) {
+    let accent = theme::palette().accent;
+    ui.horizontal(|ui| {
+        ui.add(egui::Spinner::new().size(13.0).color(accent));
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new("Pulling…").color(accent).size(12.5));
+    });
 }
 
 /// A muted `icon + value` line; shows an em-dash when the value is absent.
