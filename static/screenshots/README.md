@@ -109,5 +109,7 @@ Cross-cutting overlays that aren't tied to one tab.
 | View | `DEV_VIEW` |
 |------|-----------|
 | Blocking error modal (retryable DB error) | `error` |
+| Error modal for a failed external command (raw stderr shown) | `error-output` |
 
 ![error](shell/error.png)
+![error-output](shell/error-output.png)

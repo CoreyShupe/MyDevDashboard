@@ -160,7 +160,7 @@ impl ProjectsState {
 
         let mut delete = false;
         let mut edit_setup_script = false;
-        let mut remove_worktree: Option<Uuid> = None;
+        let mut wt_actions = worktree::RowActions::default();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -206,7 +206,7 @@ impl ProjectsState {
                         id,
                         projects,
                         tasks,
-                        &mut remove_worktree,
+                        &mut wt_actions,
                     );
                 });
             });
@@ -221,8 +221,12 @@ impl ProjectsState {
                 .unwrap_or_default();
             self.editing_setup_script = Some(SetupScriptModal::new(id, &current));
         }
-        if let Some(worktree_id) = remove_worktree {
+        if let Some(worktree_id) = wt_actions.remove {
             self.confirm_remove_worktree = Some(worktree_id);
+        }
+        if let Some(ticket_id) = wt_actions.open_ticket {
+            // Hand off to the shell → board (cross-feature): open this worktree's ticket detail.
+            self.pending_open_ticket = Some(ticket_id);
         }
     }
 

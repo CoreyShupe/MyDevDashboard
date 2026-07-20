@@ -71,6 +71,10 @@ impl Worker {
 
     /// ROOT dispatch: hand the event to the owning feature. Keep this tiny.
     async fn handle(&mut self, event: UiEvent) {
+        // Debug, not info: this fires for EVERY UI intent (incl. the frequent tab-switch
+        // `SetLastView`), so it stays out of the default run log — enable it with
+        // `RUST_LOG=my_dev_dashboard=debug` for a full blow-by-blow of what the UI asked for.
+        tracing::debug!(?event, "worker handling event");
         let backend = match self.ensure_backend().await {
             Ok(backend) => backend,
             Err(e) => {

@@ -74,6 +74,11 @@ impl ProfileService {
             source,
         })?;
 
+        tracing::info!(
+            "created profile '{}' ({})",
+            profile.display_name,
+            profile.id
+        );
         // A newly-created profile becomes the one you're working in.
         self.set_active(profile.id).await?;
         Ok(profile)
@@ -82,6 +87,7 @@ impl ProfileService {
     /// Make `id` the active profile (all others become inactive). Single-statement flip keeps
     /// the "at most one active" index satisfied.
     pub async fn set_active(&self, id: Uuid) -> Result<(), AppError> {
+        tracing::info!("switching active profile to {id}");
         sqlx::query("UPDATE profiles SET is_active = (id = $1)")
             .bind(id)
             .execute(&self.pool)
@@ -131,6 +137,7 @@ impl ProfileService {
             }
             .into());
         }
+        tracing::warn!("deleted profile {id} and its entire workspace (cascade)");
         Ok(())
     }
 }

@@ -123,8 +123,9 @@ impl BoardState {
         }
     }
 
-    /// Open the detail modal for a ticket and request its notes from the worker.
-    pub(super) fn open_ticket_modal(&mut self, bridge: &Bridge, ticket: &Ticket) {
+    /// Open the detail modal for a ticket and request its notes from the worker. `pub(crate)` so
+    /// the app shell can open a ticket detail from another feature (e.g. a project's worktree row).
+    pub(crate) fn open_ticket_modal(&mut self, bridge: &Bridge, ticket: &Ticket) {
         bridge.send(Event::load_notes(ticket.id));
         self.modal = Some(detail::TicketModal::new(ticket));
     }

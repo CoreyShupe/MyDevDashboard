@@ -97,7 +97,7 @@ impl ProjectService {
             .into());
         }
 
-        sqlx::query_as::<_, Project>(
+        let project = sqlx::query_as::<_, Project>(
             "INSERT INTO projects (id, profile_id, name, path) VALUES ($1, $2, $3, $4) \
              RETURNING id, profile_id, name, path, setup_script, created_at, updated_at",
         )
@@ -107,13 +107,17 @@ impl ProjectService {
         .bind(path)
         .fetch_one(&self.pool)
         .await
-        .map_err(|source| {
-            DbError::Query {
-                context: "create project",
-                source,
-            }
-            .into()
-        })
+        .map_err(|source| DbError::Query {
+            context: "create project",
+            source,
+        })?;
+        tracing::info!(
+            "added project '{}' at {} ({})",
+            project.name,
+            project.path,
+            project.id
+        );
+        Ok(project)
     }
 
     /// One-click **Pull** for a project: `git pull --rebase origin <branch>`, then refetch ONLY
@@ -197,6 +201,7 @@ impl ProjectService {
             }
             .into());
         }
+        tracing::info!("deleted project {id}");
         Ok(())
     }
 

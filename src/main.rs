@@ -10,11 +10,11 @@ mod app;
 mod config;
 mod domain;
 mod error;
+mod logging;
 mod system;
 mod ui;
 
 use tracing::{error, info, warn};
-use tracing_subscriber::EnvFilter;
 
 use app::{Bridge, repainter_from_ctx};
 use config::Config;
@@ -31,7 +31,7 @@ use ui::DashboardApp;
 pub const RESTART_EXIT_CODE: i32 = 86;
 
 fn main() -> eframe::Result<()> {
-    init_tracing();
+    logging::init();
 
     // Config problems are logged blatantly with a fix hint (AGENTS.md §3). We still open
     // the window so the user gets a visible, actionable error rather than a silent exit.
@@ -151,14 +151,4 @@ fn migrate_check(config: Option<Config>) -> ! {
         }
     });
     std::process::exit(code);
-}
-
-fn init_tracing() {
-    // Honor RUST_LOG if set; otherwise a sensible default for a personal tool.
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("my_dev_dashboard=info,warn"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
-        .init();
 }

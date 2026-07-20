@@ -218,6 +218,7 @@ impl WorktreeService {
                 context: "mark worktree removed",
                 source,
             })?;
+        tracing::info!("removed worktree '{}' (kept as a marker)", row.name);
         Ok(())
     }
 
@@ -320,7 +321,18 @@ impl WorktreeService {
         let fresh = !path.exists();
         if fresh {
             let new_branch = !git::branch_exists(&repo, branch).await;
+            tracing::info!(
+                "provisioning fresh worktree at {} (branch {branch}, new_branch={new_branch})",
+                path.display()
+            );
             git::worktree_add(&repo, &path, branch, new_branch).await?;
+        } else {
+            // Adopting an existing folder runs NO git command, so log it explicitly — otherwise a
+            // "why didn't the setup script run?" would have no trace (adopted folders skip setup).
+            tracing::info!(
+                "adopting existing worktree folder at {} (branch {branch}) — skipping git add + setup",
+                path.display()
+            );
         }
 
         let worktree = sqlx::query_as::<_, Worktree>(

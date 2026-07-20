@@ -164,6 +164,11 @@ pub struct UserFacingError {
     pub remediation: String,
     /// True when retrying (reconnecting + reloading) may resolve it — i.e. DB problems.
     pub retryable: bool,
+    /// Raw output from a failed external command (its stderr), if any — shown verbatim in a
+    /// monospace block in the modal so the owner sees exactly what the process said (e.g. a
+    /// `bun install` failure, or git refusing to remove a dirty worktree). `None` for errors that
+    /// aren't a subprocess failure.
+    pub output: Option<String>,
 }
 
 impl UserFacingError {
@@ -176,12 +181,14 @@ impl UserFacingError {
                 remediation: "Check your `.env` against `.env.example`, then restart the app."
                     .to_owned(),
                 retryable: false,
+                output: None,
             },
             AppError::Db(DbError::Connect { .. }) => Self {
                 title: "Database unavailable".to_owned(),
                 detail: err.to_string(),
                 remediation: "Start PostgreSQL with `dev-dash db up`, then press Retry.".to_owned(),
                 retryable: true,
+                output: None,
             },
             AppError::Db(DbError::Migrate { .. }) => Self {
                 title: "Database migration failed".to_owned(),
@@ -190,6 +197,7 @@ impl UserFacingError {
                     "Inspect the DB, or run `dev-dash db reset` for a clean schema, then Retry."
                         .to_owned(),
                 retryable: true,
+                output: None,
             },
             // Any other DB failure (query/not-found) is worth retrying — the connection
             // may have blipped; retrying reconnects and reloads without losing state.
@@ -198,33 +206,55 @@ impl UserFacingError {
                 detail: err.to_string(),
                 remediation: "Press Retry. If it persists, check the console logs.".to_owned(),
                 retryable: true,
+                output: None,
             },
             AppError::Task(_) => Self {
                 title: "Couldn't complete that".to_owned(),
                 detail: err.to_string(),
                 remediation: "Adjust the input and try again.".to_owned(),
                 retryable: false,
+                output: None,
             },
             AppError::Profile(_) => Self {
                 title: "No active profile".to_owned(),
                 detail: err.to_string(),
                 remediation: "Create or select a profile, then try again.".to_owned(),
                 retryable: false,
+                output: None,
             },
             AppError::Project(_) => Self {
                 title: "Couldn't complete that".to_owned(),
                 detail: err.to_string(),
                 remediation: "Adjust the input and try again.".to_owned(),
                 retryable: false,
+                output: None,
             },
-            AppError::Process(_) => Self {
-                title: "A command failed".to_owned(),
-                detail: err.to_string(),
-                remediation:
-                    "Check the repository state and that git (and VS Code, for opening) are \
-                     installed, then try again."
-                        .to_owned(),
-                retryable: false,
+            // An external command (git / the editor launch / a setup script) failed. Surface WHAT
+            // ran in the detail and the command's own stderr verbatim in `output`, so the owner
+            // sees exactly why (e.g. `bun: command not found`, or git refusing a dirty worktree).
+            AppError::Process(pe) => match pe {
+                ProcessError::Exited {
+                    program,
+                    context,
+                    stderr,
+                } => Self {
+                    title: "A command failed".to_owned(),
+                    detail: format!("`{program}` failed while {context}."),
+                    remediation:
+                        "See the command output below. The full run log is at `~/.dev-dash/log.txt`."
+                            .to_owned(),
+                    retryable: false,
+                    output: Some(stderr.clone()),
+                },
+                ProcessError::Spawn { .. } => Self {
+                    title: "A command failed".to_owned(),
+                    detail: pe.to_string(),
+                    remediation:
+                        "Check that git (and VS Code, for opening) are installed and on your PATH."
+                            .to_owned(),
+                    retryable: false,
+                    output: None,
+                },
             },
         }
     }

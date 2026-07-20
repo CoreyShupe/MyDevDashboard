@@ -19,6 +19,7 @@
 //! time the app runs.
 
 use std::path::Path;
+use std::process::Stdio;
 use std::time::Duration;
 
 use tokio::process::Command;
@@ -192,19 +193,60 @@ pub async fn worktree_remove(repo: &str, path: &Path) -> Result<(), ProcessError
 /// carrying the script's own stderr (unlike best-effort status reads). Callers only invoke this
 /// for a non-empty script; an empty one means "no setup" and never shells out (AGENTS.md §10).
 pub async fn run_setup_script(dir: &Path, script: &str) -> Result<(), ProcessError> {
-    let output = Command::new("bash")
-        .arg("-c")
-        .arg(script)
-        .current_dir(dir)
+    // Resolve the owner's real login-shell PATH so tools they installed via their shell profile
+    // (`bun` in `~/.bun/bin`, `cargo`, Homebrew, pnpm, …) are found. Without this a script launched
+    // from a Finder/`.app` process only sees the minimal launchd PATH and fails with
+    // "command not found" (see `login_shell_path`). Best-effort: `None` → inherit the app's PATH.
+    let shell_path = login_shell_path().await;
+    // Log a HEADER before running, so if the script hangs or exits early the run log
+    // (`~/.dev-dash/log.txt`, see `crate::logging`) still records exactly what was about to run
+    // and where — the prod-debug trail for "did my setup script even start?". The PATH is logged
+    // too, since a "command not found" is almost always a PATH problem.
+    tracing::info!(
+        "setup script starting\n\
+         ── setup script ──────────────────────────────────────────────\n\
+         dir: {}\n\
+         PATH: {}\n\
+         {}\n\
+         ──────────────────────────────────────────────────────────────",
+        dir.display(),
+        shell_path
+            .as_deref()
+            .unwrap_or("(app default — could not resolve the login-shell PATH)"),
+        script.trim_end(),
+    );
+    let mut command = Command::new("bash");
+    command.arg("-c").arg(script).current_dir(dir);
+    if let Some(path) = &shell_path {
+        command.env("PATH", path);
+    }
+    let output = command
         .output()
         .await
         .map_err(|source| ProcessError::Spawn {
             program: "bash".to_owned(),
             source,
         })?;
+    // Capture the full output into the run log regardless of outcome (stdout AND stderr, labelled),
+    // so the owner can see what the script actually printed — not just the failure tail.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let code = output.status.code();
     if output.status.success() {
+        tracing::info!(
+            "setup script finished (exit {code:?})\n\
+             ── setup output ──────────────────────────────────────────────\n\
+             [stdout]\n{stdout}\n[stderr]\n{stderr}\n\
+             ──────────────────────────────────────────────────────────────",
+        );
         Ok(())
     } else {
+        tracing::error!(
+            "setup script FAILED (exit {code:?})\n\
+             ── setup output ──────────────────────────────────────────────\n\
+             [stdout]\n{stdout}\n[stderr]\n{stderr}\n\
+             ──────────────────────────────────────────────────────────────",
+        );
         Err(ProcessError::Exited {
             program: "bash".to_owned(),
             context: "running the project setup script",
@@ -216,6 +258,7 @@ pub async fn run_setup_script(dir: &Path, script: &str) -> Result<(), ProcessErr
 /// Open a path in VS Code via the macOS launcher (robust even when the app was started from
 /// Finder and `code` isn't on PATH).
 pub async fn open_in_vscode(path: &Path) -> Result<(), ProcessError> {
+    tracing::info!("opening in VS Code: {}", path.display());
     let output = Command::new("open")
         .arg("-a")
         .arg("Visual Studio Code")
@@ -237,6 +280,32 @@ pub async fn open_in_vscode(path: &Path) -> Result<(), ProcessError> {
     }
 }
 
+/// Resolve the owner's interactive-login-shell `PATH`, so a **setup script** launched from a GUI/
+/// Finder process (which starts with only the minimal launchd PATH — `/usr/bin:/bin:…`) can still
+/// find tools they installed under `~/.bun/bin`, `~/.cargo/bin`, Homebrew, nvm, pnpm, etc. Those
+/// PATH entries live in `~/.zshrc`/`~/.zprofile`, which a plain `bash -c` never sources — so we run
+/// the owner's `$SHELL` as a **login + interactive** shell (which does source them) and read back
+/// `$PATH`, isolated with a marker so any prompt/rc chatter is ignored. Best-effort: `None` on any
+/// failure, and the setup script then just inherits the app's PATH. macOS-only tool, so `$SHELL`
+/// (zsh by default) is the right thing to consult; falls back to `/bin/zsh` if it's unset.
+async fn login_shell_path() -> Option<String> {
+    const MARKER: &str = "__DEVDASH_PATH__=";
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_owned());
+    // `-l -i` sources the login + interactive rc files (where the PATH exports live); `-c` runs our
+    // probe and exits. stdin is closed so an rc that reads input can't hang us.
+    let probe = format!("printf '%s%s' '{MARKER}' \"$PATH\"");
+    let output = Command::new(&shell)
+        .args(["-l", "-i", "-c", &probe])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Take everything after the marker (rc noise, if any, prints before it), then trim the newline.
+    let path = stdout.rsplit_once(MARKER)?.1.trim().to_owned();
+    (!path.is_empty()).then_some(path)
+}
+
 /// Run `git fetch --quiet` with a timeout. Returns whether it succeeded (so status can note
 /// the counts are fresh vs. remote); a timeout or failure is a normal offline outcome, not an
 /// error to surface.
@@ -244,7 +313,12 @@ async fn fetch(path: &str) -> bool {
     let fut = Command::new("git")
         .args(["-C", path, "fetch", "--quiet"])
         .output();
-    matches!(tokio::time::timeout(FETCH_TIMEOUT, fut).await, Ok(Ok(o)) if o.status.success())
+    let ok =
+        matches!(tokio::time::timeout(FETCH_TIMEOUT, fut).await, Ok(Ok(o)) if o.status.success());
+    // Debug, not info: a fetch runs per project on every git refresh, so keep it out of the
+    // default run log (turn it on with `RUST_LOG=my_dev_dashboard=debug` when diagnosing status).
+    tracing::debug!(path, ok, "git fetch");
+    ok
 }
 
 /// Best-effort `git -C <path> <args>` read: trimmed stdout on success, `None` on spawn error
@@ -264,8 +338,13 @@ async fn read(path: &str, args: &[&str]) -> Option<String> {
 }
 
 /// Run a git command that must succeed, mapping spawn/exit failures to a typed [`ProcessError`]
-/// carrying git's own stderr so the owner sees exactly what git said.
+/// carrying git's own stderr so the owner sees exactly what git said. Every such command (the
+/// explicit, state-changing ones: pull, worktree add/remove) is logged to the run log — the exact
+/// invocation before it runs, and its stderr on failure — so the log reads as a trail of what the
+/// app actually ran (AGENTS.md §3).
 async fn run(args: &[String], context: &'static str) -> Result<String, ProcessError> {
+    let cmd = args.join(" ");
+    tracing::info!("git {cmd}  ({context})");
     let output = Command::new("git")
         .args(args)
         .output()
@@ -275,10 +354,12 @@ async fn run(args: &[String], context: &'static str) -> Result<String, ProcessEr
             source,
         })?;
     if !output.status.success() {
+        let stderr = stderr_of(&output.stderr);
+        tracing::warn!("git {cmd} failed ({context}): {stderr}");
         return Err(ProcessError::Exited {
             program: "git".to_owned(),
             context,
-            stderr: stderr_of(&output.stderr),
+            stderr,
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())

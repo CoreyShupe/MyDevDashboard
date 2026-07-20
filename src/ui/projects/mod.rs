@@ -40,6 +40,9 @@ pub struct ProjectsState {
     confirm_remove_worktree: Option<Uuid>,
     /// The open "create worktree" modal (driven from a ticket), if any.
     creating_worktree: Option<NewWorktreeModal>,
+    /// Set when a worktree row's "Open ticket" is clicked — the shell drains this and asks the
+    /// board to open that ticket's detail (cross-feature, the reverse of create-worktree, §2).
+    pending_open_ticket: Option<Uuid>,
 }
 
 impl ProjectsState {
@@ -120,6 +123,12 @@ impl ProjectsState {
     /// directly. The projects overlays own the actual confirmation modal.
     pub fn request_remove_worktree(&mut self, worktree_id: Uuid) {
         self.confirm_remove_worktree = Some(worktree_id);
+    }
+
+    /// Take a pending "open this worktree's ticket" request raised by a worktree row on the project
+    /// detail. The shell hands the ticket to the board's detail view (cross-feature, §2).
+    pub fn take_pending_open_ticket(&mut self) -> Option<Uuid> {
+        self.pending_open_ticket.take()
     }
 
     /// Dev-only: open a project's detail page directly for review (see `ui::dev`).

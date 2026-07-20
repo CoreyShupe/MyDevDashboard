@@ -1,8 +1,25 @@
 //! Rounded, bubbly buttons in the palette's roles. No harsh default styling.
 
-use egui::{Button, Color32, CornerRadius, Response, RichText, Ui};
+use egui::{Align, Button, Color32, CornerRadius, Layout, Response, RichText, Ui};
 
 use crate::ui::theme;
+
+/// Add a **frame-less** button so its click/hover area matches its text-only visual — even inside
+/// a cross-justified layout. `egui::Ui::columns` builds each column `top_down_justified`, which
+/// stretches a bare widget to the FULL column width; for a transparent button that means the
+/// visible text is small but the whole (empty) column half is clickable/outlined. Adding it in a
+/// left-to-right sub-scope (not justified) sizes it to its content so the hit area == the visual.
+/// A no-op in a normal or horizontal layout (`horizontal_justify()` is false there), and used only
+/// for the frame-less roles — filled pills define their own boundary and are sometimes justified on
+/// purpose (e.g. the Notes actions), so those keep `ui.add`.
+fn add_hugging(ui: &mut Ui, button: Button) -> Response {
+    if ui.layout().horizontal_justify() {
+        ui.with_layout(Layout::left_to_right(Align::Center), |ui| ui.add(button))
+            .inner
+    } else {
+        ui.add(button)
+    }
+}
 
 /// Solid teal call-to-action.
 pub fn primary(ui: &mut Ui, label: &str) -> Response {
@@ -64,7 +81,8 @@ pub fn secondary(ui: &mut Ui, label: &str) -> Response {
 /// Low-emphasis, frame-less button (e.g. Refresh, Close).
 pub fn ghost(ui: &mut Ui, label: &str) -> Response {
     let p = theme::palette();
-    ui.add(
+    add_hugging(
+        ui,
         Button::new(RichText::new(label).color(p.muted))
             .fill(Color32::TRANSPARENT)
             .corner_radius(CornerRadius::same(theme::radius::INPUT)),
@@ -75,7 +93,8 @@ pub fn ghost(ui: &mut Ui, label: &str) -> Response {
 /// another entity (e.g. a ticket's parent/child).
 pub fn link(ui: &mut Ui, label: &str) -> Response {
     let p = theme::palette();
-    ui.add(
+    add_hugging(
+        ui,
         Button::new(RichText::new(label).color(p.accent))
             .fill(Color32::TRANSPARENT)
             .corner_radius(CornerRadius::same(theme::radius::INPUT)),
@@ -86,7 +105,8 @@ pub fn link(ui: &mut Ui, label: &str) -> Response {
 /// Destructive frame-less button (e.g. Delete).
 pub fn danger(ui: &mut Ui, label: &str) -> Response {
     let p = theme::palette();
-    ui.add(
+    add_hugging(
+        ui,
         Button::new(RichText::new(label).color(p.danger))
             .fill(Color32::TRANSPARENT)
             .corner_radius(CornerRadius::same(theme::radius::INPUT)),
@@ -97,7 +117,8 @@ pub fn danger(ui: &mut Ui, label: &str) -> Response {
 /// [`theme::icon`] glyph.
 pub fn icon(ui: &mut Ui, glyph: char, hover: &str) -> Response {
     let p = theme::palette();
-    ui.add(
+    add_hugging(
+        ui,
         Button::new(RichText::new(glyph.to_string()).size(16.0).color(p.muted))
             .fill(Color32::TRANSPARENT)
             .corner_radius(CornerRadius::same(8)),

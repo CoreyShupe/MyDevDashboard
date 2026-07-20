@@ -69,6 +69,8 @@ pub enum DevView {
     TodosEmpty,
     ProjectsEmpty,
     Error,
+    /// The error modal for a failed external command — shows its raw stderr in the output block.
+    ErrorOutput,
 }
 
 impl DevView {
@@ -101,6 +103,7 @@ impl DevView {
             "todos-empty" => Some(Self::TodosEmpty),
             "projects-empty" => Some(Self::ProjectsEmpty),
             "error" => Some(Self::Error),
+            "error-output" => Some(Self::ErrorOutput),
             _ => None,
         }
     }
@@ -459,5 +462,25 @@ pub fn mock_error() -> UserFacingError {
             .to_owned(),
         remediation: "Start PostgreSQL with `dev-dash db up`, then press Retry.".to_owned(),
         retryable: true,
+        output: None,
+    }
+}
+
+/// A failed EXTERNAL command — carries the process's raw stderr in `output`, rendered verbatim in
+/// the modal's monospace block (a setup script that couldn't find `bun`, the common case).
+pub fn mock_error_output() -> UserFacingError {
+    UserFacingError {
+        title: "A command failed".to_owned(),
+        detail: "`bash` failed while running the project setup script.".to_owned(),
+        remediation: "See the command output below. The full run log is at `~/.dev-dash/log.txt`."
+            .to_owned(),
+        retryable: false,
+        output: Some(
+            "\
+bun install
+bash: bun: command not found
+make: *** [setup] Error 127"
+                .to_owned(),
+        ),
     }
 }

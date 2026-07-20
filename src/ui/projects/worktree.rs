@@ -13,6 +13,16 @@ use crate::ui::theme;
 
 use super::{ProjectsState, section_label, truncate};
 
+/// The deferred actions a project-detail worktree row can raise while rendering, each recorded
+/// here for the caller (`project::render_detail`) to act on AFTER the frame: remove-this-worktree
+/// (destructive → confirmed first, §13) and open-this-worktree's-ticket (handed to the board, §2).
+/// Bundled so the row/section fns don't grow an out-param each (keeps them under clippy's arg cap).
+#[derive(Default)]
+pub(super) struct RowActions {
+    pub(super) remove: Option<Uuid>,
+    pub(super) open_ticket: Option<Uuid>,
+}
+
 /// Draft state for the open "create worktree" modal (always ticket-driven).
 pub(super) struct NewWorktreeModal {
     pub(super) ticket_id: Uuid,
@@ -40,7 +50,7 @@ pub(super) fn render_project_worktrees(
     project_id: Uuid,
     projects: &ProjectsView,
     tasks: &TasksView,
-    remove: &mut Option<Uuid>,
+    actions: &mut RowActions,
 ) {
     let muted = theme::palette().muted;
     section_label(ui, "Worktrees");
@@ -82,7 +92,15 @@ pub(super) fn render_project_worktrees(
             .ticket(w.ticket_id)
             .map(|t| t.title.as_str())
             .unwrap_or("(ticket removed)");
-        worktree_row(ui, bridge, w, title, repo_path.as_deref(), remove, projects);
+        worktree_row(
+            ui,
+            bridge,
+            w,
+            title,
+            repo_path.as_deref(),
+            actions,
+            projects,
+        );
     }
 }
 
@@ -95,7 +113,7 @@ fn worktree_row(
     w: &Worktree,
     ticket_title: &str,
     repo_path: Option<&str>,
-    remove: &mut Option<Uuid>,
+    actions: &mut RowActions,
     projects: &ProjectsView,
 ) {
     let muted = theme::palette().muted;
@@ -121,7 +139,14 @@ fn worktree_row(
         if projects.is_creating(w.project_id, w.ticket_id) {
             setup_indicator(ui);
         } else {
-            worktree_actions(ui, bridge, w, remove, projects);
+            worktree_actions(
+                ui,
+                bridge,
+                w,
+                &mut actions.remove,
+                projects,
+                Some(&mut actions.open_ticket),
+            );
         }
     });
     ui.add_space(6.0);
@@ -181,7 +206,8 @@ pub(crate) fn render_ticket_worktrees(
                 if projects.is_creating(w.project_id, w.ticket_id) {
                     setup_indicator(ui);
                 } else {
-                    worktree_actions(ui, bridge, w, remove, projects);
+                    // On the ticket detail you're already on the ticket → no "Open ticket" button.
+                    worktree_actions(ui, bridge, w, remove, projects, None);
                 }
             });
             ui.add_space(6.0);
@@ -204,12 +230,17 @@ pub(crate) fn render_ticket_worktrees(
 /// Recreate emit directly; Remove is destructive, so it only records the request into `remove`
 /// (the caller confirms before it fires — AGENTS.md §13). While a slow action (remove / open) is
 /// in flight on this worktree, its buttons are replaced by a "waiting" spinner (AGENTS.md §10).
+///
+/// `open_ticket` is `Some` only on the PROJECT detail page (where the ticket lives elsewhere): its
+/// button records the worktree's ticket id so the shell can open that ticket's detail. The TICKET
+/// detail passes `None` — you're already on the ticket, so "Open ticket" would be pointless there.
 fn worktree_actions(
     ui: &mut egui::Ui,
     bridge: &Bridge,
     w: &Worktree,
     remove: &mut Option<Uuid>,
     projects: &ProjectsView,
+    open_ticket: Option<&mut Option<Uuid>>,
 ) {
     if let Some(busy) = projects.is_busy(w.id) {
         spinner_row(ui, busy.label());
@@ -217,6 +248,12 @@ fn worktree_actions(
     }
     ui.horizontal(|ui| {
         if w.is_live() {
+            if let Some(slot) = open_ticket
+                && button::secondary(ui, &format!("{} Open ticket", theme::icon::DASHBOARD))
+                    .clicked()
+            {
+                *slot = Some(w.ticket_id);
+            }
             if button::secondary(
                 ui,
                 &format!("{} Open in VS Code", theme::icon::OPEN_EXTERNAL),

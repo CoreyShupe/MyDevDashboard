@@ -155,6 +155,7 @@ impl DashboardApp {
                 self.data = Rc::new(data);
             }
             dev::DevView::Error => self.error = Some(dev::mock_error()),
+            dev::DevView::ErrorOutput => self.error = Some(dev::mock_error_output()),
             dev::DevView::Notes => {
                 self.data = Rc::new(dev::mock_notes_view());
                 self.active_tab = Tab::Notes;
@@ -531,7 +532,8 @@ impl DashboardApp {
         let response = egui::Modal::new(egui::Id::new("error_modal"))
             .frame(theme::surface_frame())
             .show(ctx, |ui| {
-                ui.set_max_width(420.0);
+                // Widen when there's command output to show, so log lines don't wrap awkwardly.
+                ui.set_max_width(if err.output.is_some() { 620.0 } else { 420.0 });
                 ui.label(
                     egui::RichText::new(format!("{} {}", theme::icon::WARNING, err.title))
                         .heading()
@@ -539,6 +541,35 @@ impl DashboardApp {
                 );
                 ui.add_space(6.0);
                 ui.label(&err.detail);
+                // Raw stderr from a failed external command (git / a setup script / the editor
+                // launch), shown verbatim in a monospace, scrollable block so the owner sees
+                // exactly what the process said — not a paraphrase (§3).
+                if let Some(out) = err
+                    .output
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new("Command output")
+                            .strong()
+                            .color(p.muted)
+                            .size(12.5),
+                    );
+                    ui.add_space(4.0);
+                    components::card::inset(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        // Shrink to the output's height (so short output isn't a tall empty box),
+                        // but cap at 220px and scroll beyond that for a long log.
+                        egui::ScrollArea::vertical()
+                            .max_height(220.0)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new(out).monospace().size(12.0));
+                            });
+                    });
+                }
                 ui.add_space(10.0);
                 ui.label(egui::RichText::new("How to fix it").strong().color(p.muted));
                 ui.label(&err.remediation);
@@ -630,6 +661,16 @@ impl eframe::App for DashboardApp {
         // Overlays render last so they sit on top of whatever is behind them. Suppressed while a
         // full-screen onboarding flow is up (no board/notes behind them to act on).
         if data.has_profile() && !self.new_profile_flow {
+            // A worktree row's "Open ticket" (projects) opens that ticket's detail on the board —
+            // the reverse of the create-worktree hand-off (§2). Consumed before the board renders
+            // its overlays so the detail shows the same frame; switch to Tasks so the board (and
+            // the Expand-to-full-page path) is the backdrop.
+            if let Some(ticket_id) = self.projects.take_pending_open_ticket()
+                && let Some(ticket) = data.tasks.ticket(ticket_id)
+            {
+                self.active_tab = Tab::Tasks;
+                self.board.open_ticket_modal(&self.bridge, ticket);
+            }
             self.board
                 .render_overlays(&ctx, &self.bridge, &data.tasks, &data.projects);
             self.board

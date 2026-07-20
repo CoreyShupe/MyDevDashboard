@@ -49,7 +49,7 @@ allowlisted (it will prompt) — use the wrapper.
 create · stage-edit · confirm-delete · notes · notes-empty · notes-file · todos · todos-empty ·
 projects · projects-empty · projects-loading · projects-pulling · add-project · project ·
 setup-script · worktree-creating · worktree-removing · loading ·
-error` (defined
+error · error-output` (defined
 in `ui/dev.rs`; see §8). Every one has a committed screenshot under `static/screenshots/` (§11).
 **Never edit `dev-dash` itself** (trust boundary, §6).
 
@@ -100,7 +100,7 @@ can be turned into a todo, a ticket, or filed onto an existing ticket.
 | Serialization      | `serde` / `serde_json`                  | |
 | IDs                | `uuid` (v4)                             | All primary keys. |
 | Time               | `chrono`                                | `created_at` / `updated_at`. |
-| Logging            | `tracing` + `tracing-subscriber`        | Console diagnostics (see §3). |
+| Logging            | `tracing` + `tracing-subscriber`        | Console + a per-run file log at `~/.dev-dash/log.txt` (see §3). |
 | Config             | `dotenvy`                               | Load DB config from `.env`. |
 
 **Every crate above was explicitly approved by the owner.** Adding anything else
@@ -151,6 +151,7 @@ src/
 ├── main.rs              Boot sequence only.
 ├── config.rs            Shared: env/config -> ConfigError.
 ├── error.rs             Shared: AppError + typed sub-errors (§3).
+├── logging.rs           Shared: tracing setup — console + per-run `~/.dev-dash/log.txt` (§3).
 │
 ├── domain/              Pure data types. No I/O. Serde-able. One folder per feature.
 │   ├── mod.rs
@@ -244,7 +245,10 @@ thin — it only names the level below and hands off; per-action logic lives at 
   a ticket first calls `projects::worktree::remove_all_for_ticket` so its worktree folders aren't
   orphaned (§10). In the **UI**, the ticket detail renders the projects worktree section and
   raises a "create worktree" request that the shell hands to the projects UI (which owns the
-  picker) — mirroring the notes→create-ticket coordination.
+  picker) — mirroring the notes→create-ticket coordination. The **reverse** also exists: a worktree
+  row on the **project detail** has an "Open ticket" button that raises an open-ticket request
+  (`ProjectsState::take_pending_open_ticket`), which the shell hands to the **board** — it switches
+  to the Tasks tab and opens that ticket's detail (`BoardState::open_ticket_modal`).
 - The UI thread MUST NEVER block on I/O. All DB/async work happens on the tokio worker.
 
 ### Data flow (one direction each way)
@@ -284,8 +288,13 @@ mutates domain state locally except for transient input buffers (text fields).
   `ProcessError` is an external command
   (git / the editor launcher) failing to spawn or exiting non-zero — kept separate on purpose (§10).
 - `#[error("...")]` messages state **what** failed and, where actionable, **how to fix**.
-- Errors crossing into the UI become a `UserFacingError { title, detail, remediation }`
-  so the modal can render a clear, actionable message. The conversion lives in `app/`.
+- Errors crossing into the UI become a `UserFacingError { title, detail, remediation, retryable,
+  output }` so the modal can render a clear, actionable message. The conversion lives in `error.rs`
+  (`from_app_error`). **`output` carries an external command's raw stderr verbatim** — a
+  `ProcessError::Exited` (git / a setup script / the editor launch failing) puts its `stderr` here,
+  and the modal shows it in a monospace, scrollable block. So any subprocess failure surfaces
+  *exactly* what the process said (e.g. `bun: command not found`, git refusing a dirty worktree),
+  not a paraphrase; keep this — don't collapse a process error into a bare message.
 
 ### Example shape (illustrative)
 ```rust
@@ -339,6 +348,20 @@ variant for a distinct cause.
 - **IDs & time:** `uuid::Uuid` (v4) for PKs; `chrono::DateTime<Utc>` for timestamps.
 - **Logging:** use `tracing` spans/events. Log every handled error at the boundary with
   enough context to fix it. Never log secrets or full connection strings with passwords.
+  `crate::logging::init()` (called first in `main`) sends tracing to the console AND to a **per-run
+  file log** at `~/.dev-dash/log.txt`, TRUNCATED each launch so it holds only the current run —
+  this is the prod-debug trail (in a release build the app has no console). It captures app
+  diagnostics plus **subprocess output**: `git::run_setup_script` logs a header (cwd + the exact
+  script) BEFORE running, then the full stdout/stderr and exit status after, so you can see whether
+  a project's setup script (e.g. `bun install`) ran and what it printed. When you shell out to a
+  process whose output matters for debugging, log it the same way (header first, then output).
+  **Level discipline keeps the default log an activity trail, not noise:** log meaningful,
+  low-frequency actions at `info` — every explicit git command (`git::run`), the worktree
+  create/adopt/remove lifecycle, and profile/project create/switch/delete; log high-frequency or
+  best-effort things at `debug` (per-project `git fetch`, the worker's per-event dispatch trace) so
+  they're off by default but available with `RUST_LOG=my_dev_dashboard=debug`; a destructive
+  cascade (profile delete) logs at `warn`. Follow this when adding logs — a new state-changing
+  action is usually an `info` line; a per-frame/per-snapshot thing is `debug` or nothing.
 - **Comments:** match the surrounding density. Explain *why*, not *what*. Every non-trivial
   `?`-propagation chain should make its error path obvious by the types it returns.
 - **Modules:** keep `ui/` files free of business logic; keep `system/` files free of egui.
@@ -457,6 +480,17 @@ entirely, because a release/Finder launch has no relaunch loop to catch the exit
 > adapted by a small change. Prefer extending an existing one (e.g. `text_field` grew a
 > `text_field_sized` sibling rather than a new widget). One component per visual primitive.
 
+> **Button hit-area rule:** A button's clickable/hover area must match its **visible** boundary.
+> `egui::Ui::columns` (used by the detail pages) makes each column `top_down_justified`, which
+> stretches a bare widget to the full column width — for a **frame-less** button (transparent fill:
+> `ghost`/`link`/`danger`/`icon`) that means only the text shows but the whole empty column half is
+> clickable. So those roles route through `button::add_hugging`, which re-adds them in a
+> non-justified sub-scope (a no-op outside a justified layout) to size them to their content.
+> **Filled** buttons (`primary`/`secondary`/`compact_primary`) are left as-is: their fill *is* the
+> boundary, so full-width is fine and sometimes deliberate (e.g. the Notes actions). If you add a
+> new frame-less button role, hug it too; don't place a bare frame-less button in a justified column
+> without it.
+
 > **Drag-and-drop rule:** All drag-and-drop goes through `ui/components/dnd.rs` so it behaves
 > consistently. A dragged item lifts onto a floating layer and follows the pointer **from the
 > exact grab point** — never re-centre it on the cursor. Use `dnd::drag_ghost` in the
@@ -547,7 +581,8 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 | `worktree-creating` | Ticket detail with a worktree mid-provision — its setup-script spinner |
 | `worktree-removing` | Project detail with a live worktree being removed — its "Removing…" spinner |
 | `loading`        | The pre-first-snapshot loading screen (spinner before any data arrives) |
-| `error`          | The error modal |
+| `error`          | The error modal (retryable DB outage — Retry/Dismiss) |
+| `error-output`   | The error modal for a failed external command — shows the process's raw stderr in a monospace block |
 
 (The `board`/`ticket`/`page` mocks also carry projects + worktrees, so the ticket detail's
 worktree section renders under `DEV_VIEW=ticket`/`page`; one mock project carries a setup script
@@ -740,6 +775,17 @@ shown ABOVE the worktrees in that column. Rules:
   is the boundary: `bash -c <script>` in the worktree dir, a typed `ProcessError` on non-zero exit.
   Because it's `bash -c`, the script needs **no shebang** — a `#!/usr/bin/env bash` first line would
   be an inert comment (bash is already the interpreter), so don't put one in examples/placeholders.
+  It also logs a header (cwd + the exact script + the PATH used) and the full captured stdout/stderr
+  + exit status to the per-run file log (`~/.dev-dash/log.txt`, §3), so a run that hangs or fails
+  early is diagnosable there; on failure the modal shows the stderr verbatim too (§3 `output`).
+- **PATH is resolved from the owner's login shell.** A GUI/Finder launch starts with only the
+  minimal launchd PATH (`/usr/bin:/bin:…`), and a plain `bash -c` sources no rc — so tools installed
+  under `~/.bun/bin`, `~/.cargo/bin`, Homebrew, nvm, etc. would be "command not found". Before
+  running, `git::login_shell_path` runs the owner's `$SHELL` as a **login + interactive** shell
+  (which sources `~/.zshrc`/`~/.zprofile` where those PATH exports live) and reads back `$PATH`,
+  which is then set on the `bash -c` child. Best-effort: if it can't resolve, the script inherits
+  the app's PATH (and the header logs which was used). This is the *only* command that needs the
+  owner's PATH; git/editor launches use absolute-ish tools already on the minimal PATH.
 - **Provisioning is off-loop + shows a loading state.** git-add + the (possibly slow) setup script
   never run on the worker's event loop — `app::projects::spawn_worktree_create` /
   `spawn_worktree_recreate` spawn them, guarded per-`(project, ticket)` by
@@ -786,7 +832,7 @@ tables + inline thumbnails); regenerate/extend it alongside the images.
 | `notes/`    | `notes`, `notes-empty`, `notes-file` |
 | `todos/`    | `todos`, `todos-empty` |
 | `projects/` | `projects`, `projects-empty`, `projects-loading`, `projects-pulling`, `add-project`, `project`, `setup-script`, `worktree-creating`, `worktree-removing` |
-| `shell/`    | `error`, `loading`, `confirm-delete` (cross-cutting, not tied to a tab) |
+| `shell/`    | `error`, `error-output`, `loading`, `confirm-delete` (cross-cutting, not tied to a tab) |
 
 **The invariant (must always hold):**
 1. **Every `DEV_VIEW` has a mock AND a committed screenshot.** Adding a `DevView` variant
