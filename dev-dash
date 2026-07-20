@@ -18,10 +18,12 @@
 #                               `dev`   = `cargo run` (debug).
 #                               In-app "Restart" (exit 86) is caught here: prod rebuilds +
 #                               relaunches; dev re-runs `cargo run`.
-#     dev-dash bundle           Build a macOS .app bundle into builds/macos/DevDashboard.app.
+#     dev-dash bundle [copy]    Build a macOS .app bundle into builds/macos/DevDashboard.app.
 #                               Release-builds, then assembles a bundle whose executable is a
 #                               SYMLINK to target/release/<bin> (not a copy) and whose launcher
 #                               cd's into the bundle to load a COPIED .env. Double-clickable.
+#                               `copy` also installs it into /Applications (so Spotlight/Launchpad
+#                               find it).
 #     dev-dash shot VIEW OUT    Screenshot a DEV_VIEW to OUT.png, then exit the app.
 #                               VIEW = onboarding|new-profile|board|ticket|page|create|
 #                                      notes|notes-file|error (see ui::dev).
@@ -47,7 +49,7 @@ cd "$SCRIPT_DIR"
 
 usage() {
   # Print the command reference from this file's header comment.
-  sed -n '3,33p' "$SOURCE"
+  sed -n '3,35p' "$SOURCE"
   exit "${1:-0}"
 }
 
@@ -144,7 +146,12 @@ case "$cmd" in
 
   bundle)
     # Assemble a macOS .app bundle (release build + symlinked binary + copied .env).
-    exec ./static/scripts/bundle-macos.sh
+    #   (no arg) → build into builds/macos/  ·  copy → build, then install into /Applications.
+    case "${2:-}" in
+      "")   exec ./static/scripts/bundle-macos.sh ;;
+      copy) exec ./static/scripts/bundle-macos.sh copy ;;
+      *)    echo "error: unknown 'bundle' subcommand '${2:-}' (use 'copy' or omit)" >&2; usage 1 ;;
+    esac
     ;;
 
   shot)

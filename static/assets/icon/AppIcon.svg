@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Dev Dashboard app icon — the editable source of truth.
+  Generated into AppIcon.icns by static/scripts/icon-gen.sh (see AGENTS.md §14).
+
+  Fully self-drawn from the app's design system (AGENTS.md §7): the teal ACCENT tile
+  (#17C3B2) with a bubbly rounded-square (native-feeling ~22% corner) and the Material
+  "dashboard" glyph recreated as four rounded panels — the same motif shipped in
+  MaterialIcons-Regular.ttf (Apache-2.0) and used for the Tasks nav. No external art, no
+  font dependency at render time, so it rasterizes anywhere (QuickLook/any SVG renderer).
+
+  Colors + shape come straight from ui/theme.rs: accent #17C3B2, and generous rounding.
+  Panels are white for punch at icon scale. Edit here, then re-run icon-gen.sh.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <!-- Subtle top->bottom sheen on the accent so the tile reads with a little depth. -->
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1DD1BF"/>
+      <stop offset="1" stop-color="#12AC9C"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Bubbly rounded-square tile, inset 92px with transparent margins (macOS icon convention). -->
+  <rect x="92" y="92" width="840" height="840" rx="188" fill="url(#tile)"/>
+
+  <!-- "dashboard" motif: 2x2 of tall/short panels, centered (18-unit glyph in a 560px grid). -->
+  <g fill="#ffffff">
+    <rect x="302.00" y="302.00" width="186.67" height="233.33" rx="28"/> <!-- top-left  (tall)  -->
+    <rect x="535.33" y="302.00" width="186.67" height="140.00" rx="28"/> <!-- top-right (short) -->
+    <rect x="302.00" y="582.00" width="186.67" height="140.00" rx="28"/> <!-- bot-left  (short) -->
+    <rect x="535.33" y="488.67" width="186.67" height="233.33" rx="28"/> <!-- bot-right (tall)  -->
+  </g>
+</svg>

@@ -66,7 +66,7 @@ reference with all options and flags.
 | `dev-dash open [dev]`     | Launch the app detached. Default = release; `dev` = `cargo run`. **Restart** relaunches. |
 | `dev-dash help`           | Print the full command reference (also `-h` / `--help`). |
 | `dev-dash build [release]`| Compile (debug by default; `release` for optimized). |
-| `dev-dash bundle`         | Build a double-clickable macOS `.app` at `builds/macos/DevDashboard.app` (see below). |
+| `dev-dash bundle [copy]`  | Build a double-clickable macOS `.app` at `builds/macos/DevDashboard.app`; `copy` also installs it to `/Applications` (see below). |
 | `dev-dash db up`          | Start local PostgreSQL (persistent volume; creates `.env` from the example if missing). |
 | `dev-dash db down`        | Stop the database. **Data is preserved.** |
 | `dev-dash db psql`        | Open a `psql` shell against the running database. |
@@ -83,12 +83,14 @@ empty workspace. See [What it does](#what-it-does) above for a tour of each, or 
 ### A double-clickable app (`dev-dash bundle`)
 
 Prefer launching from the Dock/Finder over the terminal? `dev-dash bundle` release-builds and
-assembles a macOS app bundle at **`builds/macos/DevDashboard.app`** — `open` it, drag it to your
-Dock, or find it in Spotlight:
+assembles a macOS app bundle at **`builds/macos/DevDashboard.app`** — `open` it or drag it to your
+Dock. Add **`copy`** to also install it into `/Applications` so Spotlight and Launchpad find it:
 
 ```bash
-dev-dash bundle
+dev-dash bundle          # build into builds/macos/DevDashboard.app
 open builds/macos/DevDashboard.app
+
+dev-dash bundle copy     # build + install into /Applications (find "Dev Dashboard" in Spotlight)
 ```
 
 It's a **thin wrapper around your local build**, not a shippable app: the bundle's executable is a
@@ -96,6 +98,12 @@ It's a **thin wrapper around your local build**, not a shippable app: the bundle
 the bundle so config loads correctly). So it works as long as this repo stays in place; re-run
 `dev-dash bundle` after changing `.env`, and any later `cargo build --release` is picked up
 automatically. The in-app **Restart** button relaunches it, just like `dev-dash open`.
+
+The icon is drawn from the app's own design system (a teal tile + the "dashboard" glyph) — the
+source is `static/assets/icon/AppIcon.svg`; edit it and re-run `static/scripts/icon-gen.sh` to
+rebuild the assets. The **running app** embeds the icon and hands it to egui, so it shows on
+*every* launch path (bundle, `dev-dash open`, `cargo run`) — not just the bundle. (egui otherwise
+stamps its own default icon over the Dock on macOS.)
 
 ## The database & persistence (important)
 
@@ -199,9 +207,11 @@ so the app is usable on other platforms even before you touch those calls.
   window-raising is needed, so these need only **Screen Recording** permission (not Accessibility).
   `pkill`/`perl` handle process + timing control. A port would swap these for the platform's
   equivalents (e.g. `wmctrl`/`xdotool` + `import`/`grim` on Linux).
-- `dev-dash bundle` is **macOS-only**: it produces a `.app` bundle (`Info.plist` + `Contents/`)
-  and uses BSD `sed -i ''`. A port would emit the platform's launcher instead (e.g. a `.desktop`
-  file on Linux) — the build + symlink + `.env`-copy logic is otherwise portable.
+- `dev-dash bundle` is **macOS-only**: it produces a `.app` bundle (`Info.plist` + `Contents/`),
+  uses BSD `sed -i ''`, and its icon (`static/scripts/icon-gen.sh`) is built with the macOS
+  `sips`/`iconutil` toolchain. A port would emit the platform's launcher + icon format
+  instead (e.g. a `.desktop` file + PNGs on Linux) — the build + symlink + `.env`-copy logic and
+  the `AppIcon.svg` source are otherwise portable.
 
 ## Troubleshooting
 

@@ -25,6 +25,7 @@ cd "$REPO_ROOT"
 BIN_NAME="$(grep -m1 '^name' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
 VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
 RELEASE_BIN="$REPO_ROOT/target/release/$BIN_NAME"
+ICNS_SRC="$REPO_ROOT/static/assets/icon/AppIcon.icns"
 
 # The in-app "Restart" button exits with this code; the launcher loop below relaunches on it.
 # MUST match RESTART_EXIT_CODE in src/main.rs (and `restart_code` in dev-dash).
@@ -71,6 +72,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <string>APPL</string>
     <key>CFBundleExecutable</key>
     <string>$APP_NAME</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
     <string>11.0</string>
     <key>NSHighResolutionCapable</key>
@@ -82,6 +85,19 @@ PLIST
 # 4. Symlink to the release target (NOT a copy). Absolute path — one clear target, and a
 #    rebuild is reflected immediately since the bundle just points at target/release/.
 ln -sfn "$RELEASE_BIN" "$MACOS_DIR/$BIN_NAME"
+
+# 4b. App icon. Copy the committed AppIcon.icns (matching CFBundleIconFile above) into
+#     Resources; regenerate it from the SVG source first if it's missing (self-healing).
+if [[ ! -f "$ICNS_SRC" ]]; then
+  echo "bundle: AppIcon.icns missing — generating it from the SVG source …"
+  "$SCRIPT_DIR/icon-gen.sh"
+fi
+if [[ -f "$ICNS_SRC" ]]; then
+  cp "$ICNS_SRC" "$RES_DIR/AppIcon.icns"
+  echo "bundle: copied AppIcon.icns -> $RES_DIR/AppIcon.icns"
+else
+  echo "bundle: warning: no app icon; the bundle will use the generic default icon" >&2
+fi
 
 # 5. Launcher script = the bundle's CFBundleExecutable. It resolves its own location, cd's into
 #    Contents/Resources (where `.env` lives) so dotenvy finds config, then runs the symlinked
@@ -133,4 +149,23 @@ else
 fi
 
 echo "bundle: done -> $APP"
-echo "bundle: launch with:  open \"$APP\""
+
+# 7. Optional install: `bundle copy` also drops the bundle into /Applications so Spotlight and
+#    Launchpad find it. The binary symlink is ABSOLUTE (§4), so the installed copy still resolves
+#    it; `cp -R` preserves the symlink (does not follow it). We replace any existing install.
+if [[ "${1:-}" == "copy" ]]; then
+  DEST="/Applications/$APP_NAME.app"
+  echo "bundle: installing -> $DEST"
+  rm -rf "$DEST"
+  if cp -R "$APP" "$DEST" 2>/dev/null; then
+    # Nudge LaunchServices so Finder/Spotlight pick up the (possibly changed) icon + metadata.
+    /usr/bin/touch "$DEST"
+    echo "bundle: installed. Find it in Spotlight/Launchpad as \"Dev Dashboard\", or:  open \"$DEST\""
+  else
+    echo "bundle: error: could not write to /Applications (permission?). The bundle is still at" >&2
+    echo "        $APP — copy it manually, e.g.:  sudo cp -R \"$APP\" /Applications/" >&2
+    exit 1
+  fi
+else
+  echo "bundle: launch with:  open \"$APP\"   (or 'dev-dash bundle copy' to install to /Applications)"
+fi

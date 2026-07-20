@@ -41,7 +41,7 @@ allowlisted (it will prompt) — use the wrapper.
 | Screenshot a mock screen | `./dev-dash shot VIEW static/tmp/screenshots/NAME.png` |
 | Screenshot the LIVE running app (owner's real data) | `./dev-dash snap [static/tmp/screenshots/live.png]` |
 | Launch the app detached (in-app Restart rebuilds/relaunches) | `./dev-dash open [dev]` |
-| Build a double-clickable macOS `.app` into `builds/macos/` | `./dev-dash bundle` |
+| Build a double-clickable macOS `.app` (`copy` also installs to `/Applications`) | `./dev-dash bundle [copy]` |
 | Database up / down / wipe+restart / shell | `./dev-dash db up` · `db down` · `db reset` · `db psql` |
 
 `VIEW` ∈ `onboarding · new-profile · profile-select · board · board-empty · ticket · page ·
@@ -202,12 +202,13 @@ src/
 
 ### Top-level layout (non-`src/` files)
 Everything the app embeds or shells out to lives under **`static/`** so the repo root stays
-lean: `static/assets/` (embedded fonts), `static/migrations/` (embedded via `sqlx::migrate!`),
-`static/docker/` (both compose files), `static/scripts/` (the `db-*`/`sandbox-db` helpers +
-`window-id.swift`, the screenshot window-id helper — §8, + `bundle-macos.sh`, the macOS `.app`
-bundler — §14), `static/screenshots/` (the committed gallery, §11), and `static/tmp/` (gitignored
-scratch, §8). Build OUTPUT that is not a source input lives at the repo root under **`builds/`**
-(gitignored): `dev-dash bundle` writes `builds/macos/DevDashboard.app` there (§14).
+lean: `static/assets/` (embedded fonts + `icon/` — the app-icon `AppIcon.svg` source + generated
+`AppIcon.icns` and the embedded `AppIcon-512.png`, §14), `static/migrations/` (embedded via `sqlx::migrate!`), `static/docker/` (both
+compose files), `static/scripts/` (the `db-*`/`sandbox-db` helpers + `window-id.swift`, the
+screenshot window-id helper — §8, + `bundle-macos.sh` the macOS `.app` bundler & `icon-gen.sh` the
+icon generator — §14), `static/screenshots/` (the committed gallery, §11), and `static/tmp/`
+(gitignored scratch, §8). Build OUTPUT that is not a source input lives at the repo root under
+**`builds/`** (gitignored): `dev-dash bundle` writes `builds/macos/DevDashboard.app` there (§14).
 The `dev-dash` wrapper and the source `include_bytes!`/`sqlx::migrate!` paths point into `static/`;
 moving any of these means updating those references + `.claude/settings.json` in the same change.
 The project's Claude memory lives at **`.claude/CLAUDE.md`** (auto-loaded) and just imports this
@@ -884,16 +885,19 @@ to the owning feature via the shell, exactly like the create-worktree hand-off (
 > terminal launch — it is NOT a signed, self-contained, shippable artifact.
 
 `./dev-dash bundle` → `static/scripts/bundle-macos.sh` release-builds and assembles
-**`builds/macos/DevDashboard.app`** (gitignored output, §2 top-level layout). Structure:
+**`builds/macos/DevDashboard.app`** (gitignored output, §2 top-level layout); `dev-dash bundle
+copy` also installs it into `/Applications`. Structure:
 
 ```
 builds/macos/DevDashboard.app/Contents/
-├── Info.plist                    CFBundleExecutable = the launcher script (CFBundleIdentifier
-│                                 io.github.coreyshupe.devdashboard; version from Cargo.toml).
+├── Info.plist                    CFBundleExecutable = the launcher script; CFBundleIconFile =
+│                                 AppIcon (CFBundleIdentifier io.github.coreyshupe.devdashboard;
+│                                 version from Cargo.toml).
 ├── MacOS/
 │   ├── DevDashboard              Launcher SCRIPT (the bundle executable).
 │   └── my-dev-dashboard          SYMLINK → target/release/<bin> (absolute; NOT a copy).
 └── Resources/
+    ├── AppIcon.icns              COPIED from static/assets/icon/ (Dock/Finder icon).
     └── .env                      COPIED from the repo's .env at bundle time.
 ```
 
@@ -913,6 +917,33 @@ Three deliberate choices (do not "fix" them into a self-contained app):
   repo `.env` afterward needs a re-bundle (or edit `Contents/Resources/.env` directly). If no
   repo `.env` exists at bundle time the script warns (the app would error until one is present).
 
+**App icon.** The icon is **self-drawn from the design system** (§7) — there is no external/stock
+art. `static/assets/icon/AppIcon.svg` is the editable source: the teal `accent` tile (bubbly
+rounded square) with the Material "dashboard" glyph recreated as four rounded panels (the same
+motif shipped in `MaterialIcons-Regular.ttf`, Apache-2.0). `static/scripts/icon-gen.sh` rasterizes
+it with `sips` (NOT QuickLook `qlmanage`, which flattens the SVG's transparency onto opaque white
+— an ugly border; `sips` renders SVG natively AND keeps alpha) and, via `sips`/`iconutil`, packs every size into
+`static/assets/icon/AppIcon.icns` **and** emits `AppIcon-512.png` for the app to embed;
+**re-run it after editing the SVG**. All three (`AppIcon.svg`/`.icns`/`-512.png`) are committed.
+
+The icon reaches the running app **two ways**, both needed:
+- **`.icns` in the bundle** — the static Finder/`/Applications` icon of the `.app` file. The
+  bundler copies it into `Contents/Resources/` (self-healing: regenerates it if missing).
+- **Embedded PNG set via eframe** — `src/main.rs` `include_bytes!`s `AppIcon-512.png` and passes
+  it to `ViewportBuilder::with_icon`. This is REQUIRED, not redundant: without an icon eframe
+  loads a **default egui icon** and on macOS applies it at runtime via `setApplicationIconImage`,
+  which overrides even the bundle's `.icns`. Handing eframe our icon makes the app own its Dock
+  icon on **every** launch path (bundle, `cargo run`, `dev-dash open`). On a decode failure we
+  pass an empty `IconData`, which eframe treats as "no icon" (leaving the OS default) instead of
+  forcing its own. This uses only eframe's **public** API (`eframe::icon_data::from_png_bytes`);
+  `image` is eframe's own dependency, so **no new crate** is added — the approved stack (§1)
+  is untouched. Don't "simplify" this to a raw NSImage-from-PNG path: eframe decodes to raw RGBA
+  on purpose to dodge a macOS libpng SIGBUS bug.
+
 `dev-dash bundle` is allowlisted (`Bash(./dev-dash:*)`, §6) and touches **no** database — it only
-builds + copies files, so it's safe to run anytime (unlike `dev-dash db`/`open`, §12). The bundler
-lives in `static/scripts/` and, like the other scripts, is edit-gated (§6).
+builds + copies files, so it's safe to run anytime (unlike `dev-dash db`/`open`, §12). Its
+subcommand **`dev-dash bundle copy`** additionally installs the bundle into `/Applications` (so
+Spotlight/Launchpad find it) — `cp -R` preserves the absolute binary symlink, and it nudges
+LaunchServices (`touch`) so Finder refreshes the icon; if `/Applications` isn't writable it fails
+loudly with a `sudo cp -R` hint rather than half-installing. Both `bundle-macos.sh` and
+`icon-gen.sh` live in `static/scripts/` and, like the other scripts, are edit-gated (§6).

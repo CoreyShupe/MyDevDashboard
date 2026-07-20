@@ -13,7 +13,7 @@ mod error;
 mod system;
 mod ui;
 
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use app::{Bridge, repainter_from_ctx};
@@ -78,9 +78,26 @@ fn main() -> eframe::Result<()> {
         _ => "Dev Dashboard".to_owned(),
     };
 
+    // Own our Dock icon on EVERY launch path (bundle, `cargo run`, `dev-dash open`). Without an
+    // icon, eframe loads a default egui icon and, on macOS, applies it via `setApplicationIconImage`
+    // at runtime — which overrides even a bundle's `.icns`. So we embed our real icon and hand it
+    // to eframe. On a decode failure we fall back to an empty `IconData`, which eframe treats as
+    // "no icon" (leaving the OS/bundle default) rather than forcing its own. Uses only eframe's
+    // public API — `image` is eframe's own dependency, so no new crate (AGENTS.md §1/§14).
+    let icon = match eframe::icon_data::from_png_bytes(include_bytes!(
+        "../static/assets/icon/AppIcon-512.png"
+    )) {
+        Ok(icon) => icon,
+        Err(e) => {
+            warn!(error = %e, "could not decode the embedded app icon; falling back to default");
+            egui::IconData::default()
+        }
+    };
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(&window_title)
+            .with_icon(icon)
             // Open maximized — the bubbly, spacious design is built for a large canvas.
             .with_maximized(true)
             .with_inner_size([1100.0, 720.0])
