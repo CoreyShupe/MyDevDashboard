@@ -19,13 +19,13 @@
 #                               In-app "Restart" (exit 86) is caught here: dev re-runs
 #                               `cargo run`; prod rebuilds + relaunches. The Restart button
 #                               only exists in dev/debug builds — release omits it.
-#     dev-dash mac [bundle]     Build a macOS .app bundle into builds/macos/DevDashboard.app
-#                               (`bundle` is the default). Release-builds, then assembles a bundle
-#                               whose executable is a SYMLINK to target/release/<bin> (not a copy)
-#                               and whose launcher cd's into the bundle to load a COPIED .env.
-#                               Double-clickable.
-#     dev-dash mac copy         Same as `mac bundle`, and ALSO installs it into /Applications (so
-#                               Spotlight/Launchpad find it).
+#     dev-dash mac [copy]       Build a macOS .app bundle into builds/macos/DevDashboard.app AND
+#                               install it into /Applications (`copy` is the default). Release-
+#                               builds, then assembles a bundle whose executable is a SYMLINK to
+#                               target/release/<bin> (not a copy) and whose launcher cd's into the
+#                               bundle to load a COPIED .env. Double-clickable.
+#     dev-dash mac bundle       Build only — assemble into builds/macos/ WITHOUT installing to
+#                               /Applications.
 #     dev-dash bootstrap mac    One-shot macOS setup: require Docker to be running (errors if not),
 #                               start the database (db up), then build AND install the .app bundle
 #                               (mac bundle + copy). Only macOS is supported today; other OSes may
@@ -166,11 +166,11 @@ case "$cmd" in
 
   mac)
     # macOS-specific packaging. Assemble a .app bundle (release build + symlinked binary + copied
-    # .env). `bundle` (the default) builds into builds/macos/; `copy` also installs to /Applications.
-    case "${2:-bundle}" in
-      bundle) exec ./static/scripts/bundle-macos.sh ;;
+    # .env). `copy` (the default) builds AND installs into /Applications; `bundle` builds only.
+    case "${2:-copy}" in
       copy)   exec ./static/scripts/bundle-macos.sh copy ;;
-      *)      echo "error: unknown 'mac' subcommand '${2:-}' (use 'bundle' (default) or 'copy')" >&2; usage 1 ;;
+      bundle) exec ./static/scripts/bundle-macos.sh ;;
+      *)      echo "error: unknown 'mac' subcommand '${2:-}' (use 'copy' (default) or 'bundle')" >&2; usage 1 ;;
     esac
     ;;
 

@@ -41,7 +41,7 @@ allowlisted (it will prompt) — use the wrapper.
 | Screenshot a mock screen | `./dev-dash shot VIEW static/tmp/screenshots/NAME.png` |
 | Screenshot the LIVE running app (owner's real data) | `./dev-dash snap [static/tmp/screenshots/live.png]` |
 | Launch the app detached (dev by default; `prod` for release + Restart relaunch) | `./dev-dash open [prod]` |
-| Build a double-clickable macOS `.app` (`mac copy` also installs to `/Applications`) | `./dev-dash mac [bundle]` |
+| Build + install a double-clickable macOS `.app` to `/Applications` (`mac bundle` builds only) | `./dev-dash mac [copy]` |
 | One-shot macOS setup: require Docker running → `db up` → build + install the `.app` | `./dev-dash bootstrap mac` |
 | Database up / down / wipe+restart / shell | `./dev-dash db up` · `db down` · `db reset` · `db psql` |
 
@@ -908,10 +908,11 @@ to the owning feature via the shell, exactly like the create-worktree hand-off (
 > terminal launch — it is NOT a signed, self-contained, shippable artifact.
 
 macOS packaging lives under the **`mac`** command group (OS-scoped, so other platforms can grow
-their own later): `dev-dash mac` runs `bundle` by default. `./dev-dash mac bundle` →
-`static/scripts/bundle-macos.sh` release-builds and assembles **`builds/macos/DevDashboard.app`**
-(gitignored output, §2 top-level layout); `dev-dash mac copy` also installs it into
-`/Applications`. Structure:
+their own later): `dev-dash mac` runs `copy` by default — it release-builds + assembles the bundle
+**and** installs it into `/Applications` in one go. `./dev-dash mac bundle` is the build-only
+variant: `static/scripts/bundle-macos.sh` release-builds and assembles
+**`builds/macos/DevDashboard.app`** (gitignored output, §2 top-level layout) WITHOUT installing;
+`dev-dash mac copy` (the default) adds the `/Applications` install. Structure:
 
 ```
 builds/macos/DevDashboard.app/Contents/
@@ -967,12 +968,12 @@ The icon reaches the running app **two ways**, both needed:
   on purpose to dodge a macOS libpng SIGBUS bug.
 
 `dev-dash mac` touches **no** database — it only builds + copies files, so it's safe (it isn't on
-the agent allowlist, so it prompts, but unlike `dev-dash db`/`open` it's not *denied*, §12). Its
-subcommand **`dev-dash mac copy`** additionally installs the bundle into `/Applications` (so
-Spotlight/Launchpad find it) — `cp -R` preserves the absolute binary symlink, and it nudges
-LaunchServices (`touch`) so Finder refreshes the icon; if `/Applications` isn't writable it fails
-loudly with a `sudo cp -R` hint rather than half-installing. Both `bundle-macos.sh` and
-`icon-gen.sh` live in `static/scripts/` and, like the other scripts, are edit-gated (§6).
+the agent allowlist, so it prompts, but unlike `dev-dash db`/`open` it's not *denied*, §12). The
+default **`dev-dash mac copy`** installs the bundle into `/Applications` (so Spotlight/Launchpad
+find it) — `cp -R` preserves the absolute binary symlink, and it nudges LaunchServices (`touch`)
+so Finder refreshes the icon; if `/Applications` isn't writable it fails loudly with a
+`sudo cp -R` hint rather than half-installing. Both `bundle-macos.sh` and `icon-gen.sh` live in
+`static/scripts/` and, like the other scripts, are edit-gated (§6).
 
 **`dev-dash bootstrap mac`** is a one-shot machine setup for the owner: it **requires Docker to be
 running** (errors out with a "start Docker Desktop" hint if not — it deliberately does NOT launch
