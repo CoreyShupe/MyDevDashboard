@@ -47,7 +47,7 @@ pub enum ConfigError {
 #[derive(Debug, Error)]
 pub enum DbError {
     #[error(
-        "cannot reach PostgreSQL at `{target}`. Is the database running? Start it with `./scripts/db-up.sh`"
+        "cannot reach PostgreSQL at `{target}`. Is the database running? Start it with `dev-dash db up`"
     )]
     Connect {
         target: String,
@@ -56,7 +56,7 @@ pub enum DbError {
     },
 
     #[error(
-        "database migration failed: {source}. Try `./scripts/db-reset.sh` if the schema is corrupt"
+        "database migration failed: {source}. Try `dev-dash db reset` if the schema is corrupt"
     )]
     Migrate {
         #[source]
@@ -170,15 +170,14 @@ impl UserFacingError {
             AppError::Db(DbError::Connect { .. }) => Self {
                 title: "Database unavailable".to_owned(),
                 detail: err.to_string(),
-                remediation: "Start PostgreSQL with `./scripts/db-up.sh`, then press Retry."
-                    .to_owned(),
+                remediation: "Start PostgreSQL with `dev-dash db up`, then press Retry.".to_owned(),
                 retryable: true,
             },
             AppError::Db(DbError::Migrate { .. }) => Self {
                 title: "Database migration failed".to_owned(),
                 detail: err.to_string(),
                 remediation:
-                    "Inspect the DB, or run `./scripts/db-reset.sh` for a clean schema, then Retry."
+                    "Inspect the DB, or run `dev-dash db reset` for a clean schema, then Retry."
                         .to_owned(),
                 retryable: true,
             },

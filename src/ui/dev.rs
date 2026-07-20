@@ -363,7 +363,7 @@ pub fn mock_error() -> UserFacingError {
         title: "Database unavailable".to_owned(),
         detail: "cannot reach PostgreSQL at `localhost:5433/devdash`. Is the database running?"
             .to_owned(),
-        remediation: "Start PostgreSQL with `./scripts/db-up.sh`, then press Retry.".to_owned(),
+        remediation: "Start PostgreSQL with `dev-dash db up`, then press Retry.".to_owned(),
         retryable: true,
     }
 }
