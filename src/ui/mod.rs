@@ -68,6 +68,13 @@ impl DashboardApp {
             dev::DevView::Board => self.data = Rc::new(dev::mock_board()),
             dev::DevView::Ticket => self.dev_open_ticket(false),
             dev::DevView::Page => self.dev_open_ticket(true),
+            dev::DevView::Create => {
+                let data = dev::mock_board();
+                if let Some(stage) = data.tasks.stages.first() {
+                    self.board.dev_open_new_ticket(stage.id);
+                }
+                self.data = Rc::new(data);
+            }
             dev::DevView::Error => self.error = Some(dev::mock_error()),
         }
         tracing::warn!(
@@ -264,6 +271,7 @@ impl eframe::App for DashboardApp {
 
         // Overlays render last so they sit on top of whatever is behind them.
         self.board.render_overlays(&ctx, &self.bridge, &data.tasks);
+        self.board.render_create_modal(&ctx, &self.bridge);
         self.render_error_modal(&ctx);
     }
 }

@@ -1,34 +1,27 @@
 //! `tasks::ticket` part UI, composed of its own sub-parts:
-//!   - this file — ticket cards on the board + the new-ticket draft,
+//!   - this file — ticket cards on the board,
+//!   - `create`  — the "new ticket" modal (title + description + optional first note),
 //!   - `detail`  — the ticket detail view (modal overlay + full-page presentations),
 //!   - `link`    — the parent/child relationships section,
 //!   - `note`    — the notes list/entry.
 
+mod create;
 mod detail;
 mod link;
 mod note;
 
-use uuid::Uuid;
-
 use crate::app::Bridge;
 use crate::app::tasks::Event;
 use crate::domain::tasks::Ticket;
-use crate::ui::components::{button, card, input};
+use crate::ui::components::card;
 use crate::ui::theme;
 
 use super::BoardState;
 
-// The open ticket detail's state lives with the `detail` sub-part; re-export so the board
-// (`tasks::mod`) can hold it in `BoardState`.
+// The open ticket detail's state lives with the `detail` sub-part; the create modal's state
+// lives with `create`. Re-export both so the board (`tasks::mod`) can hold them in `BoardState`.
+pub(super) use create::NewTicketModal;
 pub(super) use detail::TicketModal;
-
-/// Draft state for creating a ticket within a specific stage column.
-#[derive(Default)]
-pub(super) struct NewTicketDraft {
-    title: String,
-    description: String,
-    open: bool,
-}
 
 impl BoardState {
     /// A single ticket card (inset surface). ONLY the 6-dot handle (top-right) initiates a
@@ -118,39 +111,6 @@ impl BoardState {
         if click.clicked() {
             self.open_ticket_modal(bridge, ticket);
         }
-    }
-
-    /// The collapsed "+ New ticket" affordance that expands into a title/description form.
-    pub(super) fn render_new_ticket(&mut self, ui: &mut egui::Ui, bridge: &Bridge, stage_id: Uuid) {
-        let draft = self.new_ticket.entry(stage_id).or_default();
-
-        if !draft.open {
-            if button::ghost(ui, &format!("{} New ticket", theme::icon::ADD)).clicked() {
-                draft.open = true;
-            }
-            return;
-        }
-
-        input::text_field(ui, &mut draft.title, "Title");
-        ui.add_space(4.0);
-        input::text_area(ui, &mut draft.description, "Description (optional)", 2);
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            let can_add = !draft.title.trim().is_empty();
-            let add = button::primary_enabled(ui, "Add", can_add).clicked();
-            let cancel = button::secondary(ui, "Cancel").clicked();
-
-            if add && can_add {
-                bridge.send(Event::create_ticket(
-                    stage_id,
-                    draft.title.trim().to_owned(),
-                    draft.description.trim().to_owned(),
-                ));
-                *draft = NewTicketDraft::default();
-            } else if cancel {
-                *draft = NewTicketDraft::default();
-            }
-        });
     }
 
     /// Open the detail modal for a ticket and request its notes from the worker.

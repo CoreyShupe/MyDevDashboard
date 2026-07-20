@@ -127,18 +127,19 @@ impl BoardState {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.scope(|ui| {
-                        ui.set_max_width(1120.0);
-                        ui.heading("Ticket");
-                        ui.add_space(12.0);
-                        // Two columns: all the ticket data on the left, the full notes list
-                        // as a wide column on the right.
-                        ui.columns(2, |cols| {
-                            body_main(&mut cols[0], modal, view, &mut out);
-                            notes_section(&mut cols[1], modal, &mut out, None);
-                        });
-                    });
+                ui.heading("Ticket");
+                ui.add_space(12.0);
+                // Full-width two columns: ticket data pinned to the left edge, the full notes
+                // list pinned to the right edge, with a clear gap between them (the outer
+                // margins come from the workspace's own 18px `CentralPanel` inset). Widen the
+                // inter-column gap, then restore normal spacing inside each column so button
+                // rows etc. aren't stretched.
+                ui.spacing_mut().item_spacing.x = 40.0;
+                ui.columns(2, |cols| {
+                    cols[0].spacing_mut().item_spacing.x = 8.0;
+                    body_main(&mut cols[0], modal, view, &mut out);
+                    cols[1].spacing_mut().item_spacing.x = 8.0;
+                    notes_section(&mut cols[1], modal, &mut out, None);
                 });
             });
 
@@ -183,20 +184,40 @@ impl BoardState {
 fn body_main(ui: &mut egui::Ui, modal: &mut TicketModal, view: &TasksView, out: &mut Outcome) {
     let muted = theme::palette().muted;
     let ticket_id = modal.ticket_id;
-    let current_stage = view.ticket(ticket_id).map(|t| t.stage_id);
+    let saved = view.ticket(ticket_id);
+    let current_stage = saved.map(|t| t.stage_id);
+
+    // Which fields differ from what's persisted? (Compared trimmed, since that's what a save
+    // writes.) Drives both the per-field "edited" outline and the Save button's enabled state.
+    let title_changed = saved.map(|t| t.title.as_str()) != Some(modal.title.trim());
+    let desc_changed = saved.map(|t| t.description.as_str()) != Some(modal.description.trim());
+    let dirty = title_changed || desc_changed;
 
     ui.label(egui::RichText::new("Title").strong().color(muted));
     ui.add_space(4.0);
-    input::text_field(ui, &mut modal.title, "Ticket title");
+    input::text_field_marked(ui, &mut modal.title, "Ticket title", title_changed);
 
     ui.add_space(10.0);
     ui.label(egui::RichText::new("Description").strong().color(muted));
     ui.add_space(4.0);
-    input::text_area(ui, &mut modal.description, "What needs doing?", 4);
+    input::text_area_marked(
+        ui,
+        &mut modal.description,
+        "What needs doing?",
+        4,
+        desc_changed,
+    );
 
     ui.add_space(12.0);
     ui.horizontal(|ui| {
-        let can_save = !modal.title.trim().is_empty();
+        // Buttons and the combo box each clamp their height UP to `interact_size.y`. The
+        // buttons' text+padding naturally exceeds the default (30), but the combo sits at the
+        // floor — so they'd render at different heights. Raise the floor above the buttons'
+        // natural height and everything in this row lands at the same height.
+        ui.spacing_mut().interact_size.y = 34.0;
+
+        // Only savable when there's an actual (non-empty-title) change to persist.
+        let can_save = dirty && !modal.title.trim().is_empty();
         let save_label = format!("{} Save changes", theme::icon::SAVE);
         if button::primary_enabled(ui, &save_label, can_save).clicked() {
             out.events.push(Event::update_ticket(

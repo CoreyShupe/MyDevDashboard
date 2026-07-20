@@ -43,8 +43,13 @@ impl Event {
     pub fn delete_stage(id: Uuid) -> Self {
         Self::Stage(stage::Command::delete(id))
     }
-    pub fn create_ticket(stage_id: Uuid, title: String, description: String) -> Self {
-        Self::Ticket(ticket::Command::create(stage_id, title, description))
+    pub fn create_ticket(
+        stage_id: Uuid,
+        title: String,
+        description: String,
+        note: Option<String>,
+    ) -> Self {
+        Self::Ticket(ticket::Command::create(stage_id, title, description, note))
     }
     pub fn update_ticket(id: Uuid, title: String, description: String) -> Self {
         Self::Ticket(ticket::Command::update(id, title, description))

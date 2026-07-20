@@ -291,8 +291,8 @@ Because this is a GUI, verify UI changes by looking at the running app, not just
 
 - **Force a specific screen without a DB** via the `DEV_VIEW` env var (see `ui/dev.rs`);
   worker snapshots are ignored while it's set:
-  `DEV_VIEW={onboarding|board|ticket|page|error}` (`ticket` = detail modal, `page` = the
-  full-page detail).
+  `DEV_VIEW={onboarding|board|ticket|page|create|error}` (`ticket` = detail modal, `page` =
+  the full-page detail, `create` = the new-ticket modal).
 - **Run the binary by ABSOLUTE path**, not `target/debug/…` relative — this shell's cwd
   drifts (e.g. after a `cd` for a file move), and a wrong relative path makes the launch fail
   silently, so you end up screenshotting whatever was already frontmost. If a capture shows
@@ -384,7 +384,7 @@ is the primary way to get a screenshot. It's the trusted wrapper (see the `dev-d
 boundary note in §6) — prefer it over hand-rolling the `screencapture` dance.
 
 ```bash
-./dev-dash shot ticket tmp/screenshots/ticket.png   # VIEW = onboarding|board|ticket|page|error
+./dev-dash shot ticket tmp/screenshots/ticket.png   # VIEW = onboarding|board|ticket|page|create|error
 ./dev-dash shot page   tmp/screenshots/page.png
 ```
 
@@ -408,6 +408,7 @@ renders instantly. Set the env var when launching:
 DEV_VIEW=board      cargo run   # populated Tasks board
 DEV_VIEW=onboarding cargo run   # setup-profile screen
 DEV_VIEW=ticket     cargo run   # board with a ticket modal open
+DEV_VIEW=create     cargo run   # board with the new-ticket create modal open
 DEV_VIEW=error      cargo run   # the error modal
 ```
 
@@ -438,5 +439,6 @@ Notes: `timeout` isn't on macOS — bound a foreground run with
 
 _Last updated as part of: initial scaffold + onboarding/profile + Tasks board (feature-sliced,
 composed of parts; no seeding; no unit tests) + design system (theme + component kit) +
-ticket detail split (two-column page / capped modal notes) + handle-only card drag; clippy as
-primary check; mandatory screenshot verification via `dev-dash shot`._
+ticket detail split (two-column page / capped modal notes) + handle-only card drag + new-ticket
+modal (title/description/first note, replacing the inline form); clippy as primary check;
+mandatory screenshot verification via `dev-dash shot`._

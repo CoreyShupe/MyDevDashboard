@@ -9,24 +9,22 @@
 mod stage;
 mod ticket;
 
-use std::collections::HashMap;
-
 use uuid::Uuid;
 
 use crate::app::Bridge;
 use crate::app::tasks::{Message, View as TasksView};
 use crate::ui::theme;
 
-use ticket::{NewTicketDraft, TicketModal};
+use ticket::{NewTicketModal, TicketModal};
 
 /// All transient UI state for the board. Lives in the UI only.
 #[derive(Default)]
 pub struct BoardState {
     new_stage_name: String,
     editing_stage: Option<(Uuid, String)>,
-    /// Per-stage new-ticket drafts, keyed by stage id.
-    new_ticket: HashMap<Uuid, NewTicketDraft>,
-    /// The open ticket modal, if any.
+    /// The open "new ticket" modal, if any (board-wide; one at a time).
+    new_ticket: Option<NewTicketModal>,
+    /// The open ticket detail modal, if any.
     modal: Option<TicketModal>,
 }
 
@@ -53,6 +51,8 @@ impl BoardState {
         modal.notes = crate::ui::dev::mock_notes(ticket.id); // exercise the notes cap / wide list
         modal.notes_loaded = true;
         modal.expanded = expanded;
+        // Opens clean (buffers == saved), so Save starts disabled and no field is outlined —
+        // edit a field live to see the "changed" outline + enabled Save.
         self.modal = Some(modal);
     }
 

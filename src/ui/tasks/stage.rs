@@ -53,7 +53,7 @@ impl BoardState {
                 });
 
             ui.add_space(2.0);
-            self.render_new_ticket(ui, bridge, stage.id);
+            self.render_new_ticket(ui, stage.id);
         })
         .response;
 

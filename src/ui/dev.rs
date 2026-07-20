@@ -22,6 +22,8 @@ pub enum DevView {
     Ticket,
     /// The ticket detail as the full-page (expanded) view.
     Page,
+    /// The "new ticket" create modal, open over the board.
+    Create,
     Error,
 }
 
@@ -33,6 +35,7 @@ impl DevView {
             "board" => Some(Self::Board),
             "ticket" => Some(Self::Ticket),
             "page" => Some(Self::Page),
+            "create" => Some(Self::Create),
             "error" => Some(Self::Error),
             _ => None,
         }

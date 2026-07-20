@@ -12,6 +12,8 @@ pub enum Command {
         stage_id: Uuid,
         title: String,
         description: String,
+        /// Optional first note recorded against the new ticket (from the create modal).
+        note: Option<String>,
     },
     Update {
         id: Uuid,
@@ -38,11 +40,17 @@ pub enum Command {
 }
 
 impl Command {
-    pub fn create(stage_id: Uuid, title: String, description: String) -> Self {
+    pub fn create(
+        stage_id: Uuid,
+        title: String,
+        description: String,
+        note: Option<String>,
+    ) -> Self {
         Self::Create {
             stage_id,
             title,
             description,
+            note,
         }
     }
     pub fn update(id: Uuid, title: String, description: String) -> Self {
@@ -77,12 +85,24 @@ pub async fn handle(backend: &Backend, emitter: &Emitter, cmd: Command) {
             stage_id,
             title,
             description,
-        } => backend
-            .tasks
-            .ticket
-            .create(stage_id, &title, &description, None)
-            .await
-            .map(|_| ()),
+            note,
+        } => {
+            // Create the ticket, then (if given) record its first note against the new id.
+            match backend
+                .tasks
+                .ticket
+                .create(stage_id, &title, &description, None)
+                .await
+            {
+                Ok(ticket) => match note.as_deref().map(str::trim) {
+                    Some(body) if !body.is_empty() => {
+                        backend.tasks.note.add(ticket.id, body).await.map(|_| ())
+                    }
+                    _ => Ok(()),
+                },
+                Err(e) => Err(e),
+            }
+        }
         Command::Update {
             id,
             title,
