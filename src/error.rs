@@ -23,6 +23,12 @@ pub enum AppError {
 
     #[error(transparent)]
     Profile(#[from] ProfileError),
+
+    #[error(transparent)]
+    Project(#[from] ProjectError),
+
+    #[error(transparent)]
+    Process(#[from] ProcessError),
 }
 
 /// Configuration / environment problems (loading `.env`, reading `DATABASE_URL`, …).
@@ -88,6 +94,54 @@ pub enum ProfileError {
     NoActive,
 }
 
+/// Projects/worktrees domain validation & rule violations (AGENTS.md §10). Distinct from
+/// [`ProcessError`] (a git/editor command actually failing) — these are refusals *before* we
+/// ever shell out, because an input or a rule doesn't hold.
+#[derive(Debug, Error)]
+pub enum ProjectError {
+    #[error("a {field} is required and cannot be empty")]
+    Empty { field: &'static str },
+
+    #[error(
+        "the path `{path}` does not exist on disk. Enter the path to a repository you already have"
+    )]
+    PathMissing { path: String },
+
+    #[error(
+        "`{path}` is not a git repository. This tool points at existing local repos (it never clones)"
+    )]
+    NotARepo { path: String },
+
+    #[error(
+        "this ticket already has a worktree in project `{project}`. A ticket may have only one worktree per project"
+    )]
+    WorktreeExists { project: String },
+
+    #[error("worktree `{id}` was not found")]
+    WorktreeMissing { id: String },
+}
+
+/// An external command we shelled out to (git, or the editor launcher) failed. Kept separate
+/// from [`ProjectError`] so "git refused / isn't installed" reads differently from "your input
+/// was invalid". Git *status* reads never produce this (they degrade to empty fields); only
+/// explicit actions (worktree add/remove, open in editor) surface it.
+#[derive(Debug, Error)]
+pub enum ProcessError {
+    #[error("could not run `{program}`: {source}. Is it installed and on your PATH?")]
+    Spawn {
+        program: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("`{program}` failed while {context}: {stderr}")]
+    Exited {
+        program: String,
+        context: &'static str,
+        stderr: String,
+    },
+}
+
 /// The user-aware view of an error, rendered by the UI modal.
 ///
 /// Carries a short `title`, a `detail` describing what happened, a concrete `remediation`
@@ -146,6 +200,21 @@ impl UserFacingError {
                 title: "No active profile".to_owned(),
                 detail: err.to_string(),
                 remediation: "Create or select a profile, then try again.".to_owned(),
+                retryable: false,
+            },
+            AppError::Project(_) => Self {
+                title: "Couldn't complete that".to_owned(),
+                detail: err.to_string(),
+                remediation: "Adjust the input and try again.".to_owned(),
+                retryable: false,
+            },
+            AppError::Process(_) => Self {
+                title: "A command failed".to_owned(),
+                detail: err.to_string(),
+                remediation:
+                    "Check the repository state and that git (and VS Code, for opening) are \
+                     installed, then try again."
+                        .to_owned(),
                 retryable: false,
             },
         }

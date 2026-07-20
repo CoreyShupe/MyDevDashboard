@@ -6,12 +6,14 @@
 pub mod db;
 pub mod notes;
 pub mod profile;
+pub mod projects;
 pub mod tasks;
 
 use sqlx::postgres::PgPool;
 
 use notes::NotesService;
 use profile::ProfileService;
+use projects::ProjectsService;
 use tasks::TasksService;
 
 /// Aggregate of every feature's service, sharing a single connection pool.
@@ -23,6 +25,7 @@ pub struct Backend {
     pub profile: ProfileService,
     pub tasks: TasksService,
     pub notes: NotesService,
+    pub projects: ProjectsService,
 }
 
 impl Backend {
@@ -30,7 +33,8 @@ impl Backend {
         Self {
             profile: ProfileService::new(pool.clone()),
             tasks: TasksService::new(pool.clone()),
-            notes: NotesService::new(pool),
+            notes: NotesService::new(pool.clone()),
+            projects: ProjectsService::new(pool),
         }
     }
 }

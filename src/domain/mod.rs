@@ -4,4 +4,5 @@
 
 pub mod notes;
 pub mod profile;
+pub mod projects;
 pub mod tasks;

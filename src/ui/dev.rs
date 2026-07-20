@@ -8,9 +8,11 @@
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::app::{ViewData, notes, profile, tasks};
+use crate::app::projects::ProjectCard;
+use crate::app::{ViewData, notes, profile, projects, tasks};
 use crate::domain::notes::Note as UncategorizedNote;
 use crate::domain::profile::Profile;
+use crate::domain::projects::{GitStatus, Project, Worktree};
 use crate::domain::tasks::{Note, Stage, Ticket};
 use crate::error::UserFacingError;
 
@@ -33,6 +35,10 @@ pub enum DevView {
     Notes,
     /// The Notes tab with the "Add to ticket" search picker open.
     NotesFile,
+    /// The Projects tab: a grid of repository cards.
+    Projects,
+    /// A single project's full-page detail (metadata + worktrees).
+    Project,
     Error,
 }
 
@@ -49,6 +55,8 @@ impl DevView {
             "stage-edit" => Some(Self::StageEdit),
             "notes" => Some(Self::Notes),
             "notes-file" => Some(Self::NotesFile),
+            "projects" => Some(Self::Projects),
+            "project" => Some(Self::Project),
             "error" => Some(Self::Error),
             _ => None,
         }
@@ -64,6 +72,7 @@ pub fn mock_board() -> ViewData {
         display_name: "Work".to_owned(),
         created_at: now,
     };
+    let work_id = work.id;
     let personal = Profile {
         id: Uuid::new_v4(),
         display_name: "Personal".to_owned(),
@@ -134,10 +143,106 @@ pub fn mock_board() -> ViewData {
     let parent = tickets[0].id;
     tickets[1].parent_id = Some(parent);
 
+    // Projects + worktrees, exercising the grid states (up-to-date, out-of-sync, no-origin) and
+    // the worktree section on the ticket detail (a ticket with two shared-branch worktrees plus
+    // a removed marker). Worktrees link to real mock tickets so titles resolve.
+    let project = |name: &str, path: &str| Project {
+        id: Uuid::new_v4(),
+        profile_id: work_id,
+        name: name.to_owned(),
+        path: path.to_owned(),
+        created_at: now,
+        updated_at: now,
+    };
+    let dashboard = project("my-dev-dashboard", "/Users/you/Programming/MyDevDashboard");
+    let api = project("acme-api", "/Users/you/Programming/acme-api");
+    let scratch = project("scratchpad", "/Users/you/Programming/scratchpad");
+    let projects_cards = vec![
+        ProjectCard {
+            project: dashboard.clone(),
+            git: GitStatus {
+                is_repo: true,
+                origin_url: Some("git@github.com:you/my-dev-dashboard.git".to_owned()),
+                branch: Some("main".to_owned()),
+                clean: true,
+                has_upstream: true,
+                ahead: 0,
+                behind: 0,
+                fetched: true,
+            },
+        },
+        ProjectCard {
+            project: api.clone(),
+            git: GitStatus {
+                is_repo: true,
+                origin_url: Some("git@github.com:acme/acme-api.git".to_owned()),
+                branch: Some("feature/worktrees".to_owned()),
+                clean: false,
+                has_upstream: true,
+                ahead: 2,
+                behind: 1,
+                fetched: true,
+            },
+        },
+        ProjectCard {
+            project: scratch.clone(),
+            git: GitStatus {
+                is_repo: true,
+                origin_url: None,
+                branch: Some("main".to_owned()),
+                clean: true,
+                has_upstream: false,
+                ahead: 0,
+                behind: 0,
+                fetched: false,
+            },
+        },
+    ];
+    let worktree = |project_id, ticket_id, name: &str, branch: &str, removed: bool| Worktree {
+        id: Uuid::new_v4(),
+        project_id,
+        ticket_id,
+        name: name.to_owned(),
+        branch: branch.to_owned(),
+        removed_at: removed.then(|| now - chrono::Duration::days(2)),
+        created_at: now,
+    };
+    // Attach the shared-branch worktrees to the ticket the ticket/page DEV_VIEWs open (the child
+    // "Ticket drag-and-drop", tickets[1]) so its Worktrees section renders populated (§8).
+    let worktrees = vec![
+        // One ticket, one shared branch, live worktrees in two projects (branch sync in action).
+        worktree(
+            dashboard.id,
+            tickets[1].id,
+            "projects-tab",
+            "feature/projects-tab",
+            false,
+        ),
+        worktree(
+            api.id,
+            tickets[1].id,
+            "projects-tab",
+            "feature/projects-tab",
+            false,
+        ),
+        // A removed worktree (historical marker) on another ticket — recreatable.
+        worktree(
+            dashboard.id,
+            tickets[2].id,
+            "design-pass",
+            "feature/design-pass",
+            true,
+        ),
+    ];
+
     ViewData {
         profile,
         tasks: tasks::View { stages, tickets },
         notes: notes::View::default(),
+        projects: projects::View {
+            projects: projects_cards,
+            worktrees,
+        },
     }
 }
 

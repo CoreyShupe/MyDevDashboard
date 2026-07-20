@@ -116,7 +116,15 @@ pub async fn handle(backend: &Backend, emitter: &Emitter, cmd: Command) {
         Command::Move { id, new_stage_id } => {
             backend.tasks.ticket.move_to_stage(id, new_stage_id).await
         }
-        Command::Delete { id } => backend.tasks.ticket.delete(id).await,
+        Command::Delete { id } => {
+            // Cross-feature reach (AGENTS.md §2): a ticket owns its worktrees, so clean their
+            // on-disk folders (best effort) BEFORE the ticket delete cascades those rows away —
+            // otherwise the folders would be orphaned. Then delete the ticket itself.
+            match backend.projects.worktree.remove_all_for_ticket(id).await {
+                Ok(()) => backend.tasks.ticket.delete(id).await,
+                Err(e) => Err(e),
+            }
+        }
         Command::CreateChild {
             parent_id,
             title,

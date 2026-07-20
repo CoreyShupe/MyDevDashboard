@@ -14,6 +14,7 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::app::Bridge;
+use crate::app::projects::View as ProjectsView;
 use crate::app::tasks::{Message, View as TasksView};
 use crate::ui::theme;
 
@@ -32,6 +33,9 @@ pub struct BoardState {
     new_ticket: Option<NewTicketModal>,
     /// The open ticket detail modal, if any.
     modal: Option<TicketModal>,
+    /// Set when the open ticket detail asks to create a worktree. The app shell drains this and
+    /// opens the projects-owned create-worktree picker (cross-feature, AGENTS.md §2).
+    pending_worktree: Option<Uuid>,
 }
 
 impl BoardState {
@@ -71,13 +75,25 @@ impl BoardState {
         }
     }
 
+    /// Take a pending "create worktree for this ticket" request, if the open detail raised one.
+    /// The app shell calls this after rendering to hand it to the projects UI.
+    pub fn take_pending_worktree(&mut self) -> Option<Uuid> {
+        self.pending_worktree.take()
+    }
+
     /// The board workspace: header (title + add-stage) and the horizontal stage columns.
     ///
     /// When a ticket detail is expanded, the full-page ticket view takes over the workspace
     /// instead of the board (the modal overlay is suppressed while expanded).
-    pub fn render_workspace(&mut self, ui: &mut egui::Ui, bridge: &Bridge, view: &TasksView) {
+    pub fn render_workspace(
+        &mut self,
+        ui: &mut egui::Ui,
+        bridge: &Bridge,
+        view: &TasksView,
+        projects: &ProjectsView,
+    ) {
         if self.modal.as_ref().is_some_and(|m| m.expanded) {
-            self.render_ticket_page(ui, bridge, view);
+            self.render_ticket_page(ui, bridge, view, projects);
             return;
         }
 

@@ -29,8 +29,8 @@ cargo run
 ```
 
 On first launch you'll land on the onboarding screen to create your first **profile**. Then
-you'll drop into the dashboard with a left side-nav (**Tasks**, **Notes**) and an empty
-workspace.
+you'll drop into the dashboard with a left side-nav (**Tasks**, **Notes**, **Projects**) and an
+empty workspace.
 
 - **Profiles** — self-contained workspaces you switch between from the switcher at the top of
   the nav. Each profile has its **own** stages, tickets, and notes — they never mix. "New
@@ -44,6 +44,14 @@ workspace.
   (Enter or **Add**), then file it later: **Create Ticket** turns a note into a new ticket
   (pre-filled as its first note), or **Add To Ticket** searches your tickets by title and
   attaches the note to the one you pick. Filing a note removes it from the list.
+- **Projects** — local repositories you already have on disk (this never clones — you paste a
+  path). Each project is a card showing its name, origin URL, path, current branch, a live
+  up-to-date badge, and its worktree count. Open a project for a full page with its metadata and
+  its git **worktrees** (at `{repo}/.github/worktrees/{name}`), each openable in VS Code. A
+  worktree is created from a **ticket** — "Create worktree" on a ticket picks a project and a
+  branch; a ticket keeps the **same branch across every project** it has a worktree in, so you
+  can work the same change in parallel across repos. Removing a worktree cleans its folder but
+  keeps a marker so you can recreate it later. You run all commits/pushes/pulls yourself.
 
 ---
 
@@ -98,7 +106,7 @@ src/
   main.rs      Boot sequence: config -> tokio worker -> egui.
   error.rs     All typed errors (thiserror). See AGENTS.md §3.
   config.rs    Env/config loading.
-  domain/      Pure data types (Profile, Stage, Ticket, Note, uncategorized Note).
+  domain/      Pure data types (Profile, Stage, Ticket, Note, uncategorized Note, Project, Worktree).
   system/      DB pool + services (business logic). No UI here.
   app/         The bridge: events, view-model, tokio worker.
   ui/          Pure egui rendering. No DB here.

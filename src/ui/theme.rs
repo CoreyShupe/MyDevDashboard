@@ -76,6 +76,13 @@ pub mod icon {
     pub const UNLINK: char = '\u{e16f}'; // link_off (detach from parent)
     pub const EXPAND: char = '\u{e5d0}'; // fullscreen (expand ticket to full page)
     pub const BACK: char = '\u{e5c4}'; // arrow_back (return from full page to board)
+    pub const PROJECTS: char = '\u{e2c7}'; // folder (nav: Projects)
+    pub const BRANCH: char = '\u{e97a}'; // account_tree (worktrees / branch)
+    pub const OPEN_EXTERNAL: char = '\u{e89e}'; // open_in_new (open worktree in VS Code)
+    pub const LINK_URL: char = '\u{e157}'; // link (project origin URL)
+    pub const PATH: char = '\u{e2c8}'; // folder_open (repository path)
+    pub const CHECK: char = '\u{e86c}'; // check_circle (git: up to date)
+    pub const SYNC: char = '\u{e627}'; // sync (git: ahead/behind/dirty)
 }
 
 /// Corner radii (px). Bubbly = generous.

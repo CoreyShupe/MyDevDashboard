@@ -10,8 +10,15 @@ license = "MIT"
 eframe = "0.35"
 egui = "0.35"
 
-# Async runtime — workers/tasks only
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# Async runtime — workers/tasks only. `process` lets the projects feature shell out to `git`
+# and the editor launcher off the worker thread; `time` bounds the `git fetch` on status reads.
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "time",
+    "process",
+] }
 
 # Database driver — runtime-checked queries, embedded migrations
 sqlx = { version = "0.9", default-features = false, features = [

@@ -11,6 +11,7 @@
 use uuid::Uuid;
 
 use crate::app::Bridge;
+use crate::app::projects::View as ProjectsView;
 use crate::app::tasks::{Event, View as TasksView};
 use crate::domain::tasks::{Note, Ticket};
 use crate::ui::components::{button, input};
@@ -64,17 +65,26 @@ struct Outcome {
     navigate: Option<Uuid>,
     /// Close the detail entirely (delete / close button / backdrop).
     close: bool,
+    /// The detail asked to create a worktree for this ticket (the shell opens the picker).
+    create_worktree: bool,
 }
 
 impl BoardState {
     /// Modal presentation (overlay). Skipped while the detail is expanded to a full page.
-    pub fn render_overlays(&mut self, ctx: &egui::Context, bridge: &Bridge, view: &TasksView) {
+    pub fn render_overlays(
+        &mut self,
+        ctx: &egui::Context,
+        bridge: &Bridge,
+        view: &TasksView,
+        projects: &ProjectsView,
+    ) {
         let Some(modal) = self.modal.as_mut() else {
             return;
         };
         if modal.expanded {
             return; // the full-page view (in the workspace) is handling it
         }
+        let ticket_id = modal.ticket_id;
 
         let mut out = Outcome::default();
         let response = egui::Modal::new(egui::Id::new(("ticket_modal", modal.ticket_id)))
@@ -93,7 +103,7 @@ impl BoardState {
                     });
                 });
                 ui.add_space(10.0);
-                body_main(ui, modal, view, &mut out);
+                body_main(ui, modal, view, projects, bridge, &mut out);
                 ui.add_space(14.0);
                 ui.separator();
                 ui.add_space(6.0);
@@ -102,6 +112,9 @@ impl BoardState {
             });
 
         let dismissed = response.should_close();
+        if out.create_worktree {
+            self.pending_worktree = Some(ticket_id);
+        }
         self.settle_detail(bridge, view, out, dismissed);
     }
 
@@ -111,10 +124,12 @@ impl BoardState {
         ui: &mut egui::Ui,
         bridge: &Bridge,
         view: &TasksView,
+        projects: &ProjectsView,
     ) {
         let Some(modal) = self.modal.as_mut() else {
             return;
         };
+        let ticket_id = modal.ticket_id;
 
         let mut out = Outcome::default();
         ui.horizontal(|ui| {
@@ -137,12 +152,15 @@ impl BoardState {
                 ui.spacing_mut().item_spacing.x = 40.0;
                 ui.columns(2, |cols| {
                     cols[0].spacing_mut().item_spacing.x = 8.0;
-                    body_main(&mut cols[0], modal, view, &mut out);
+                    body_main(&mut cols[0], modal, view, projects, bridge, &mut out);
                     cols[1].spacing_mut().item_spacing.x = 8.0;
                     notes_section(&mut cols[1], modal, &mut out, None);
                 });
             });
 
+        if out.create_worktree {
+            self.pending_worktree = Some(ticket_id);
+        }
         self.settle_detail_page(bridge, view, out);
     }
 
@@ -181,7 +199,14 @@ impl BoardState {
 /// The main detail body: title, description, actions, relationships. The notes section is
 /// rendered separately so each presentation can place it differently — the modal appends a
 /// capped list below this, the full page gives it its own wide column beside this.
-fn body_main(ui: &mut egui::Ui, modal: &mut TicketModal, view: &TasksView, out: &mut Outcome) {
+fn body_main(
+    ui: &mut egui::Ui,
+    modal: &mut TicketModal,
+    view: &TasksView,
+    projects: &ProjectsView,
+    bridge: &Bridge,
+    out: &mut Outcome,
+) {
     let muted = theme::palette().muted;
     let ticket_id = modal.ticket_id;
     let saved = view.ticket(ticket_id);
@@ -245,6 +270,18 @@ fn body_main(ui: &mut egui::Ui, modal: &mut TicketModal, view: &TasksView, out: 
     ui.label(egui::RichText::new("Relationships").strong().size(15.0));
     ui.add_space(6.0);
     super::link::render(ui, modal, view, &mut out.events, &mut out.navigate);
+
+    ui.add_space(14.0);
+    ui.separator();
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new("Worktrees").strong().size(15.0));
+    ui.add_space(6.0);
+    // Worktrees are a cross-feature (projects) concern; the projects UI renders this ticket's
+    // worktrees and reports whether the owner asked to create one (AGENTS.md §2). Open/remove/
+    // recreate emit projects events directly through the bridge.
+    if crate::ui::projects::render_ticket_worktrees(ui, bridge, ticket_id, projects) {
+        out.create_worktree = true;
+    }
 }
 
 /// The notes section (header + list + entry). `limit` caps how many recent notes show —

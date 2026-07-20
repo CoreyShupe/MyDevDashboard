@@ -6,7 +6,7 @@
 use crate::error::AppError;
 use crate::system::Backend;
 
-use super::{notes, profile, tasks};
+use super::{notes, profile, projects, tasks};
 
 /// Aggregate view state. Add a field here when you add a feature with a `View`.
 #[derive(Debug, Clone, Default)]
@@ -14,6 +14,7 @@ pub struct ViewData {
     pub profile: profile::View,
     pub tasks: tasks::View,
     pub notes: notes::View,
+    pub projects: projects::View,
 }
 
 impl ViewData {
@@ -22,18 +23,24 @@ impl ViewData {
         let profile = profile::View::load(&backend.profile).await?;
         // Everything is scoped to the active profile (AGENTS.md §9). Load the board + notes for
         // it; on first run (no active profile) there's nothing to load.
-        let (tasks, notes) = if let Some(profile_id) = profile.active_id() {
+        let (tasks, notes, projects) = if let Some(profile_id) = profile.active_id() {
             (
                 tasks::View::load(&backend.tasks, profile_id).await?,
                 notes::View::load(&backend.notes, profile_id).await?,
+                projects::View::load(&backend.projects, profile_id).await?,
             )
         } else {
-            (tasks::View::default(), notes::View::default())
+            (
+                tasks::View::default(),
+                notes::View::default(),
+                projects::View::default(),
+            )
         };
         Ok(Self {
             profile,
             tasks,
             notes,
+            projects,
         })
     }
 

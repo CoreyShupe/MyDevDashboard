@@ -10,6 +10,7 @@ pub mod theme;
 mod dev;
 mod notes;
 mod profile;
+mod projects;
 mod tasks;
 
 use std::rc::Rc;
@@ -26,6 +27,7 @@ use components::button;
 pub enum Tab {
     Tasks,
     Notes,
+    Projects,
 }
 
 /// The eframe application shell. Owns UI state only; system state lives behind the `Bridge`.
@@ -38,6 +40,7 @@ pub struct DashboardApp {
     onboarding: profile::OnboardingState,
     board: tasks::BoardState,
     notes: notes::NotesState,
+    projects: projects::ProjectsState,
 
     // Shell-level overlay.
     error: Option<UserFacingError>,
@@ -63,6 +66,7 @@ impl DashboardApp {
             onboarding: profile::OnboardingState::default(),
             board: tasks::BoardState::default(),
             notes: notes::NotesState::default(),
+            projects: projects::ProjectsState::default(),
             error: None,
             new_profile_flow: false,
             active_profile_id: None,
@@ -115,6 +119,18 @@ impl DashboardApp {
                 self.data = Rc::new(data);
                 self.active_tab = Tab::Notes;
             }
+            dev::DevView::Projects => {
+                self.data = Rc::new(dev::mock_board());
+                self.active_tab = Tab::Projects;
+            }
+            dev::DevView::Project => {
+                let data = dev::mock_board();
+                if let Some(card) = data.projects.projects.first() {
+                    self.projects.dev_open_project(card.project.id);
+                }
+                self.data = Rc::new(data);
+                self.active_tab = Tab::Projects;
+            }
         }
         tracing::warn!(
             ?view,
@@ -153,10 +169,12 @@ impl DashboardApp {
                     if active != self.active_profile_id {
                         self.board = tasks::BoardState::default();
                         self.notes = notes::NotesState::default();
+                        self.projects = projects::ProjectsState::default();
                         self.active_profile_id = active;
                     }
-                    // Let the board close a modal whose ticket vanished, etc.
+                    // Let the board / projects close a modal or detail whose entity vanished.
                     self.board.reconcile(&data.tasks);
+                    self.projects.reconcile(&data.projects);
                     self.data = data;
                 }
                 // Feature-specific messages route to the owning feature's UI state.
@@ -199,6 +217,11 @@ impl DashboardApp {
                 // Nav tabs. Add a tab per feature as they land.
                 self.nav_item(ui, Tab::Tasks, &format!("{} Tasks", theme::icon::DASHBOARD));
                 self.nav_item(ui, Tab::Notes, &format!("{} Notes", theme::icon::NOTES));
+                self.nav_item(
+                    ui,
+                    Tab::Projects,
+                    &format!("{} Projects", theme::icon::PROJECTS),
+                );
 
                 // Footer: manual refresh (re-pulls state from the DB) + restart. In a
                 // bottom-up layout the first item added sits lowest, so Restart lands UNDER
@@ -224,7 +247,10 @@ impl DashboardApp {
                     .inner_margin(egui::Margin::same(18)),
             )
             .show(ui, |ui| match self.active_tab {
-                Tab::Tasks => self.board.render_workspace(ui, &self.bridge, &data.tasks),
+                Tab::Tasks => {
+                    self.board
+                        .render_workspace(ui, &self.bridge, &data.tasks, &data.projects)
+                }
                 Tab::Notes => {
                     let outcome = self.notes.render_workspace(ui, &self.bridge, &data.notes);
                     // "Create Ticket" from a note drives the board's create modal, so the
@@ -234,6 +260,10 @@ impl DashboardApp {
                         self.board
                             .open_new_ticket_from_note(note_id, body, &data.tasks);
                     }
+                }
+                Tab::Projects => {
+                    self.projects
+                        .render_workspace(ui, &self.bridge, &data.projects, &data.tasks)
                 }
             });
     }
@@ -358,12 +388,20 @@ impl eframe::App for DashboardApp {
         // Overlays render last so they sit on top of whatever is behind them. Suppressed while a
         // full-screen onboarding flow is up (no board/notes behind them to act on).
         if data.has_profile() && !self.new_profile_flow {
-            self.board.render_overlays(&ctx, &self.bridge, &data.tasks);
+            self.board
+                .render_overlays(&ctx, &self.bridge, &data.tasks, &data.projects);
             self.board
                 .render_create_modal(&ctx, &self.bridge, &data.tasks);
             self.board
                 .render_stage_modal(&ctx, &self.bridge, &data.tasks);
             self.notes.render_overlays(&ctx, &self.bridge, &data.tasks);
+            // A "Create worktree" request raised by the open ticket detail is handed to the
+            // projects UI, which owns the picker (cross-feature coordination, AGENTS.md §2).
+            if let Some(ticket_id) = self.board.take_pending_worktree() {
+                self.projects.open_create_worktree(ticket_id);
+            }
+            self.projects
+                .render_overlays(&ctx, &self.bridge, &data.projects, &data.tasks);
         }
         self.render_error_modal(&ctx);
     }

@@ -8,6 +8,7 @@ pub mod bridge;
 pub mod event;
 pub mod notes;
 pub mod profile;
+pub mod projects;
 pub mod state;
 pub mod tasks;
 pub mod worker;

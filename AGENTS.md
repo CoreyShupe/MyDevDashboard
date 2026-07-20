@@ -20,10 +20,11 @@ specify a more precise sub-rule here first**, then continue. Do not silently dev
 ## Quick reference (skim this first, then §0–§9)
 
 **Shape.** Two axes (§2): horizontal layers `domain → system → app → ui`, crossed with vertical
-feature slices — `profile`, `tasks` (parts: `stage`, `ticket`, `note`), `notes`. The **same
-feature name appears in every layer**. All DB/business logic lives behind a `*Service` in
-`system/`; `app/` is the only UI↔system channel; `ui/` never touches the DB. Full tree +
-dispatch pattern in §2.
+feature slices — `profile`, `tasks` (parts: `stage`, `ticket`, `note`), `notes`, `projects`
+(parts: `project`, `worktree`). The **same feature name appears in every layer**. All
+DB/business logic lives behind a `*Service` in `system/`; `app/` is the only UI↔system channel;
+`ui/` never touches the DB. The **one** place the app shells out to external commands (git, the
+editor launcher) is `system/projects/git.rs` (§10). Full tree + dispatch pattern in §2.
 
 **Where's the data?** In Postgres, reached only through `system/<feature>/`. Schema is in
 `migrations/NNNN_*.sql`. Everything is scoped to the **active profile** (§9).
@@ -41,8 +42,9 @@ allowlisted (it will prompt) — use the wrapper.
 | Launch the app detached (in-app Restart rebuilds/relaunches) | `./dev-dash open [dev]` |
 | Database up / down / wipe+restart / shell | `./dev-dash db up` · `db down` · `db reset` · `db psql` |
 
-`VIEW` ∈ `onboarding · new-profile · board · ticket · page · create · notes · notes-file ·
-error` (defined in `ui/dev.rs`; see §8). **Never edit `dev-dash` itself** (trust boundary, §6).
+`VIEW` ∈ `onboarding · new-profile · board · ticket · page · create · stage-edit · notes ·
+notes-file · projects · project · error` (defined in `ui/dev.rs`; see §8). **Never edit
+`dev-dash` itself** (trust boundary, §6).
 
 **Before you're done:** `cargo fmt` → `cargo clippy` (clean) → `./dev-dash build` → **screenshot
 every screen you touched** (§8). No unit tests (§6). If you added a crate/feature/table/error
@@ -65,8 +67,10 @@ between (via the nav switcher) — everything belongs to exactly one and they ne
 Inside the active profile: a configurable, Jira-like **Tasks** board (stages → tickets → notes;
 stages reorder by dragging their grip, and can be marked **terminal** in the edit-stage modal —
 an end state like "Complete"/"Cancelled" that collapses to a ticket count and is hidden from
-"Add to ticket") and a **Notes** tab for quick, uncategorized capture (which can later become a
-ticket or be filed onto one).
+"Add to ticket"); a **Notes** tab for quick, uncategorized capture (which can later become a
+ticket or be filed onto one); and a **Projects** tab — local repositories (never cloned) shown
+as cards with live git status, each opening to a detail page of its git **worktrees**, which are
+created per-ticket to enable parallel work on different branches (§10).
 
 ---
 
@@ -79,7 +83,7 @@ ticket or be filed onto one).
 | Concern            | Choice                                  | Notes |
 |--------------------|-----------------------------------------|-------|
 | UI framework       | `egui` + `eframe` (0.35)                | Native macOS, immediate-mode. `App::ui`/`App::logic`, `Panel`, `Modal`. |
-| Async runtime      | `tokio`                                 | Workers/tasks only. |
+| Async runtime      | `tokio`                                 | Workers/tasks only. Features incl. `process` — the `projects` feature shells out to `git`/the editor launcher off-thread (§10); no git *library* crate is used. |
 | Database           | PostgreSQL (via Docker)                 | Local, persistent volume. |
 | DB driver          | `sqlx` (0.9, runtime-checked queries)   | Builds WITHOUT a live DB. Migrations embedded. |
 | Errors             | `thiserror` (enum + sub-enums)          | See §3. |
@@ -142,14 +146,17 @@ src/
 │   ├── mod.rs
 │   ├── profile/         Profile.
 │   ├── tasks/           mod.rs + parts: stage.rs (Stage), ticket.rs (Ticket), note.rs (Note).
-│   └── notes/           Note — an uncategorized (unfiled) note. Single concept, like profile.
+│   ├── notes/           Note — an uncategorized (unfiled) note. Single concept, like profile.
+│   └── projects/        mod.rs + parts: project.rs (Project + GitStatus), worktree.rs (Worktree).
 │
 ├── system/             "System functionality": DB + business logic. No egui, ever.
 │   ├── mod.rs               `Backend` = aggregate of every feature's service.
 │   ├── db.rs               Shared: pool creation + migrations.
 │   ├── profile/            ProfileService.
 │   ├── tasks/              mod.rs `TasksService` = { stage, ticket, note } part-services.
-│   └── notes/              NotesService — CRUD for the `uncategorized_notes` table.
+│   ├── notes/              NotesService — CRUD for the `uncategorized_notes` table.
+│   └── projects/           mod.rs `ProjectsService` = { project, worktree }; git.rs = the ONE
+│                           external-command boundary (git reads/worktree ops + editor launch, §10).
 │
 ├── app/                The BRIDGE + orchestration root. Root dispatch lives here.
 │   ├── mod.rs              Re-exports.
@@ -159,7 +166,9 @@ src/
 │   ├── worker.rs           ROOT dispatcher: routes a UiEvent to the owning feature.
 │   ├── profile/            profile::{Event, View, handle()}  — the feature "sub-root".
 │   ├── tasks/              mod.rs dispatches to parts: stage/ticket/note::{Command, handle()}.
-│   └── notes/              notes::{Event, View, handle()}. `FileIntoTicket` reaches into tasks.
+│   ├── notes/              notes::{Event, View, handle()}. `FileIntoTicket` reaches into tasks.
+│   └── projects/           mod.rs dispatches to parts: project/worktree::{Command, handle()}.
+│                           `View` = projects (with live GitStatus) + all worktrees.
 │
 └── ui/                 PURE rendering. No DB. One folder per feature + the shell + kit.
     ├── mod.rs              `DashboardApp` (eframe): shell nav, workspace, error modal.
@@ -168,7 +177,9 @@ src/
     ├── dev.rs              Dev-only `DEV_VIEW` screen overrides for visual review (§8).
     ├── profile/            Onboarding "setup profile" screen + its transient UI state.
     ├── tasks/              mod.rs board + part renderers: stage.rs, ticket.rs, note.rs, modal.rs.
-    └── notes/              Notes tab: composer + note rows + the "Add to ticket" picker.
+    ├── notes/              Notes tab: composer + note rows + the "Add to ticket" picker.
+    └── projects/           Projects tab: card grid, project detail page, worktree rows +
+                            add-project / create-worktree modals.
 ```
 (`assets/fonts/Nunito.ttf` — SIL OFL, embedded via `include_bytes!`. Not a crate.)
 
@@ -195,8 +206,12 @@ thin — it only names the level below and hands off; per-action logic lives at 
 - **Cross-feature reach is allowed.** A feature handler gets `&Backend` (all services) and
   may call another feature's service when a genuine cross-feature interaction calls for it.
   Keep such reaches deliberate and commented. Examples today: `notes::FileIntoTicket` adds a
-  ticket note then deletes the uncategorized note; the `stage` and `notes` create handlers call
-  `app::profile::active_id(backend)` to scope new rows to the active profile (§9).
+  ticket note then deletes the uncategorized note; the `stage`/`notes`/`project` create handlers
+  call `app::profile::active_id(backend)` to scope new rows to the active profile (§9); deleting
+  a ticket first calls `projects::worktree::remove_all_for_ticket` so its worktree folders aren't
+  orphaned (§10). In the **UI**, the ticket detail renders the projects worktree section and
+  raises a "create worktree" request that the shell hands to the projects UI (which owns the
+  picker) — mirroring the notes→create-ticket coordination.
 - The UI thread MUST NEVER block on I/O. All DB/async work happens on the tokio worker.
 
 ### Data flow (one direction each way)
@@ -229,8 +244,11 @@ mutates domain state locally except for transient input buffers (text fields).
 
 ### Structure
 - One top-level `AppError` enum in `error.rs`.
-- Domain-specific **sub-error** enums (`ConfigError`, `DbError`, `TaskError`, …), each a
-  `#[from]` variant of `AppError`. Sub-errors carry structured fields, not just strings.
+- Domain-specific **sub-error** enums (`ConfigError`, `DbError`, `TaskError`, `ProfileError`,
+  `ProjectError`, `ProcessError`, …), each a `#[from]` variant of `AppError`. Sub-errors carry
+  structured fields, not just strings. `ProjectError` is domain-rule refusals for projects/
+  worktrees (bad path, not-a-repo, duplicate worktree); `ProcessError` is an external command
+  (git / the editor launcher) failing to spawn or exiting non-zero — kept separate on purpose (§10).
 - `#[error("...")]` messages state **what** failed and, where actionable, **how to fix**.
 - Errors crossing into the UI become a `UserFacingError { title, detail, remediation }`
   so the modal can render a clear, actionable message. The conversion lives in `app/`.
@@ -453,7 +471,12 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 | `stage-edit`  | Edit-stage modal (name + terminal toggle + delete) |
 | `notes`       | Notes tab, populated |
 | `notes-file`  | Notes tab with the "Add to ticket" picker open |
+| `projects`    | Projects tab: card grid (up-to-date / out-of-sync / no-origin states) |
+| `project`     | A project's full-page detail (metadata + live + removed worktrees) |
 | `error`       | The error modal |
+
+(The `board`/`ticket`/`page` mocks also carry projects + worktrees, so the ticket detail's
+worktree section renders under `DEV_VIEW=ticket`/`page`.)
 
 **When you add a screen/feature, add a `DevView` variant + mock to `ui/dev.rs`** (and a row
 above) so it stays reviewable. Dev mocks are gated solely by the env var — never wire them into
@@ -480,19 +503,72 @@ How it's enforced (keep new data consistent with this):
   `UPDATE profiles SET is_active = (id = $1)`. `create()` makes the new profile active. `active()`
   returns it (falling back to the oldest profile so a pre-multi-profile DB still resolves).
 - **Scoping columns.** Top-level tables carry `profile_id … REFERENCES profiles(id) ON DELETE
-  CASCADE` (`stages`, `uncategorized_notes`). Nested entities inherit their profile through their
-  parent rather than duplicating the column: **tickets** via their `stage` (list joins `stages`),
-  **ticket-notes** via their `ticket`. Deleting a profile cascades its whole workspace.
+  CASCADE` (`stages`, `uncategorized_notes`, `projects`). Nested entities inherit their profile
+  through their parent rather than duplicating the column: **tickets** via their `stage` (list
+  joins `stages`), **ticket-notes** via their `ticket`, **worktrees** via their `project` (lists
+  join `projects`). Deleting a profile cascades its whole workspace.
 - **Resolving the active profile.** Handlers that create profile-scoped rows call
   `app::profile::active_id(&Backend) -> Result<Uuid, AppError>` (a `ProfileError::NoActive` if
-  none) so the UI never threads a profile id through events. `ViewData::load` scopes the board +
-  notes to `profile.active_id()`; a fresh snapshot after any change reloads the active profile's
-  data.
+  none) so the UI never threads a profile id through events. `ViewData::load` scopes the board,
+  notes, and projects to `profile.active_id()`; a fresh snapshot after any change reloads the
+  active profile's data.
 - **UI.** The nav shows a **profile switcher** (`ui/profile::render_switcher`, `SwitcherStyle::Nav`)
   — switch profiles or pick "New profile" (→ the new-profile onboarding flow). The onboarding
   screen has two modes (`OnboardingMode::{FirstRun, NewProfile}`); **new-profile mode** shows a
   top-left escape hatch — a **Back** link and a compact switcher — so you can leave without
   creating one (Back and picking any profile, including the current one, both exit; the switcher
   reports this via `SwitcherOutcome::selected_current`). **First-run has no escape** (no profile
-  to return to). The shell resets transient board/notes state when the active profile changes so
-  one profile's open modals don't bleed into another.
+  to return to). The shell resets transient board/notes/projects state when the active profile
+  changes so one profile's open modals don't bleed into another.
+
+---
+
+## 10. Projects & worktrees
+
+> **Points-at-repos rule:** A **project is an existing local repository path** (profile-scoped,
+> §9). This tool NEVER clones — the owner enters a path they already have; `create` validates
+> the path exists and is a git repo (else a typed `ProjectError`). Only durable identity
+> (name + path) is stored; git facts are read live (below), never persisted.
+
+**Git is read live, never stored.** Origin URL, current branch, clean/dirty, and ahead/behind
+are computed at snapshot time in `system/projects/git.rs` and travel in the `View` as a
+`GitStatus` — so a card can never show stale git data. Status reads are **best-effort**: a
+non-repo / missing remote / failed fetch degrade to empty fields and NEVER fail the snapshot.
+The status **fetches first** (bounded by a timeout) then compares; if the fetch can't connect it
+**falls back to local refs** and flags `fetched = false`. "Up to date" = real repo + clean +
+in sync with upstream.
+
+**Git is the only tool; the owner drives history.** Committing / pushing / pulling are done by
+the owner **by hand** — the app never runs them, so the exact commands stay theirs. The app only
+reads status and manages worktrees. Assume SSH keys are loaded by the time the app runs.
+
+**Worktrees.** A worktree lives at **`{repo}/.github/worktrees/{name}`** (the path convention —
+never deviate) and is tied **1:1 to a ticket** within a project:
+
+- **Ticket-driven creation only.** The only create entry point is a ticket's detail page
+  (§2 coordination). A ticket may have **at most one worktree per project**; `worktree::create`
+  rejects a duplicate (`ProjectError::WorktreeExists`).
+- **One shared branch per ticket.** The branch is chosen once (on the ticket's first worktree)
+  and **reused** for every later worktree of that ticket, in any project — so a ticket's work
+  sits on the same branch name everywhere. Different projects are different repos, so each still
+  gets its own `-b` branch creation.
+- **Delete leaves a marker.** Removing a worktree (via the UI, or the cleanup on ticket delete)
+  runs `git worktree remove` (NOT forced — a dirty tree makes git refuse, and that surfaces so
+  nothing is lost) and sets `removed_at`, keeping the row as a **historical marker** of the
+  branch name. It can be **recreated** from that marker (same branch + folder) from the ticket or
+  project detail.
+- **Reconcile against disk.** Before building a projects snapshot, `worktree::reconcile` flips
+  any live worktree whose folder has vanished (owner deleted it outside the app) to a marker, so
+  counts stay honest and it stays recreatable.
+- **Ticket delete cleans up.** Deleting a ticket first best-effort-removes its live worktree
+  folders (`remove_all_for_ticket`) before the rows cascade away, avoiding orphaned folders.
+
+**Open in VS Code.** A worktree row's "Open in VS Code" launches `open -a "Visual Studio Code"
+<path>` off the worker thread. It changes no state, so its handler does **not** snapshot — it
+only surfaces an error on failure. This is the one non-git external command; it lives beside git
+in `system/projects/git.rs` and rolls up as `ProcessError` like git does.
+
+**Schema.** `projects` (profile-scoped, cascades) + `worktrees` (a churny, lightweight table:
+`project_id`, `ticket_id`, `name`, `branch`, `removed_at`, with `UNIQUE(project_id, ticket_id)`
+and a partial-unique on active `(project_id, name)`). Both cascade from their parents. Keep the
+worktrees table lean — it takes common hard creates/deletes.
