@@ -738,6 +738,8 @@ shown ABOVE the worktrees in that column. Rules:
 - **Runs on a fresh provision only** — a first-time create OR a recreate (removal deleted the
   folder), never on an ADOPTED existing folder (that was already set up). `git::run_setup_script`
   is the boundary: `bash -c <script>` in the worktree dir, a typed `ProcessError` on non-zero exit.
+  Because it's `bash -c`, the script needs **no shebang** — a `#!/usr/bin/env bash` first line would
+  be an inert comment (bash is already the interpreter), so don't put one in examples/placeholders.
 - **Provisioning is off-loop + shows a loading state.** git-add + the (possibly slow) setup script
   never run on the worker's event loop — `app::projects::spawn_worktree_create` /
   `spawn_worktree_recreate` spawn them, guarded per-`(project, ticket)` by

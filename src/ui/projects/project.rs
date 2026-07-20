@@ -387,12 +387,10 @@ impl ProjectsState {
                     .size(12.5),
                 );
                 ui.add_space(12.0);
-                input::text_area(
-                    ui,
-                    draft.script_mut(),
-                    "#!/usr/bin/env bash\nbun install",
-                    12,
-                );
+                // No shebang in the placeholder: the script is executed with `bash -c <script>`
+                // (system::projects::git::run_setup_script), so a `#!/usr/bin/env bash` line would
+                // just be an inert comment — bash is already the interpreter.
+                input::text_area(ui, draft.script_mut(), "bun install", 12);
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
                     save = button::primary(ui, &format!("{} Save", theme::icon::SAVE)).clicked();

@@ -255,7 +255,8 @@ pub fn mock_board() -> ViewData {
     let dashboard = project(
         "my-dev-dashboard",
         "/Users/you/Programming/MyDevDashboard",
-        "#!/usr/bin/env bash\nset -euo pipefail\n\nbun install\nbun run build",
+        // No shebang: setup scripts run via `bash -c <script>`, so one would be an inert comment.
+        "set -euo pipefail\n\nbun install\nbun run build",
     );
     let webapp = project("acme-web", "/Users/you/Programming/acme-web", "");
     let api = project("acme-api", "/Users/you/Programming/acme-api", "");
