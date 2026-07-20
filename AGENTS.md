@@ -43,8 +43,8 @@ allowlisted (it will prompt) — use the wrapper.
 | Database up / down / wipe+restart / shell | `./dev-dash db up` · `db down` · `db reset` · `db psql` |
 
 `VIEW` ∈ `onboarding · new-profile · board · board-empty · ticket · page · create · stage-edit ·
-notes · notes-empty · notes-file · todos · todos-empty · projects · projects-empty · add-project ·
-project · error` (defined in `ui/dev.rs`; see §8). Every one has a committed screenshot under
+notes · notes-empty · notes-file · todos · todos-empty · projects · projects-empty ·
+projects-loading · add-project · project · loading · error` (defined in `ui/dev.rs`; see §8). Every one has a committed screenshot under
 `screenshots/` (§11). **Never edit `dev-dash` itself** (trust boundary, §6).
 
 **Before you're done:** `cargo fmt` → `cargo clippy` (clean) → `./dev-dash build` → **screenshot
@@ -486,8 +486,10 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 | `todos-empty`    | Todos tab with nothing to do (empty state) |
 | `projects`       | Projects tab: card grid (up-to-date / out-of-sync / no-origin states) |
 | `projects-empty` | Projects tab with no projects (empty state) |
+| `projects-loading` | Projects tab mid-refresh — cards + header show the git-status spinner |
 | `add-project`    | The "add project" modal over the grid (native folder picker + name) |
 | `project`        | A project's full-page detail (metadata + live + removed worktrees) |
+| `loading`        | The pre-first-snapshot loading screen (spinner before any data arrives) |
 | `error`          | The error modal |
 
 (The `board`/`ticket`/`page` mocks also carry projects + worktrees, so the ticket detail's
@@ -544,15 +546,43 @@ How it's enforced (keep new data consistent with this):
 > **Points-at-repos rule:** A **project is an existing local repository path** (profile-scoped,
 > §9). This tool NEVER clones — the owner enters a path they already have; `create` validates
 > the path exists and is a git repo (else a typed `ProjectError`). Only durable identity
-> (name + path) is stored; git facts are read live (below), never persisted.
+> (name + path) is stored; git facts are read live (below), never persisted **to the DB**.
 
-**Git is read live, never stored.** Origin URL, current branch, clean/dirty, and ahead/behind
-are computed at snapshot time in `system/projects/git.rs` and travel in the `View` as a
-`GitStatus` — so a card can never show stale git data. Status reads are **best-effort**: a
-non-repo / missing remote / failed fetch degrade to empty fields and NEVER fail the snapshot.
-The status **fetches first** (bounded by a timeout) then compares; if the fetch can't connect it
-**falls back to local refs** and flags `fetched = false`. "Up to date" = real repo + clean +
-in sync with upstream.
+**Git is computed by shelling out, cached for the session, refreshed on open + on demand.**
+Origin URL, current branch, clean/dirty, and ahead/behind are computed in
+`system/projects/git.rs` and travel in the `View` as a `GitStatus`. Because a status read
+**fetches first** (`git fetch`, bounded by a timeout) it can be network-bound, so it must NOT
+run on every snapshot — otherwise every stage/note/todo mutation pays N git fetches and the whole
+app feels slow. Instead:
+
+- **`ProjectService` holds a session cache** (`Arc<Mutex<HashMap<path, GitStatus>>>`, shared
+  across `Backend` clones). `cached_statuses` reads it (never shells out) and is what
+  `projects::View::load` — and therefore every snapshot — uses. `refresh_statuses` is the ONLY
+  thing that shells out; it fetches all paths concurrently, stamps each `GitStatus.checked_at`,
+  and writes the cache.
+- **The fetch is offloaded, never blocking.** `app::projects::spawn_git_refresh` claims a CAS
+  guard (`ProjectService::begin_refresh`, so concurrent refreshes don't pile up) and **`tokio::spawn`s**
+  the fetch — so it never delays the Postgres snapshot, the worker's event loop, or the UI thread.
+  When it lands it clears the flag (`end_refresh`) and emits a fresh snapshot. Callers snapshot
+  immediately after kicking it, so the tab shows a loading state right away. The `refreshing` flag
+  travels in `projects::View`.
+- **A git refetch runs on:** (1) once on open — `Worker::refresh` kicks `spawn_git_refresh` then
+  emits the DB snapshot immediately (git fills in a moment later); (2) on demand — the
+  **"Refresh git"** button on the Projects grid + project detail page → `projects::Event::refresh_status()`
+  → `project::Command::RefreshStatus`; (3) after **create project**, so a newly-added repo's status
+  loads. Nothing else fetches. (The global nav "Refresh"/`ReloadAll` reloads the DB + reads the git
+  cache; it does NOT refetch git.)
+- **The UI shows load/checked state, never implies "live".** While `refreshing`, the grid header,
+  each card's badge, and the detail page show a spinner. Otherwise the grid header shows
+  "Checked HH:MM" (most recent `checked_at`) and the detail page shows it per project;
+  `checked_at = None` (a profile whose projects were never fetched) reads as "not checked", not
+  "not a repo". Separately, the whole app shows a **loading screen (not onboarding)** until the
+  first snapshot arrives (`DashboardApp::loaded`) — an empty `ViewData` looks identical to "no
+  profile", so without the gate a slow DB connect would flash the first-run flow.
+
+Status reads stay **best-effort**: a non-repo / missing remote / failed fetch degrade to empty
+fields and NEVER fail the snapshot; a failed fetch falls back to local refs and flags
+`fetched = false`. "Up to date" = real repo + clean + in sync with upstream.
 
 **Git is the only tool; the owner drives history.** Committing / pushing / pulling are done by
 the owner **by hand** — the app never runs them, so the exact commands stay theirs. The app only
@@ -609,8 +639,8 @@ tables + inline thumbnails); regenerate/extend it alongside the images.
 | `tasks/`    | `board`, `board-empty`, `ticket`, `page`, `create`, `stage-edit` |
 | `notes/`    | `notes`, `notes-empty`, `notes-file` |
 | `todos/`    | `todos`, `todos-empty` |
-| `projects/` | `projects`, `projects-empty`, `add-project`, `project` |
-| `shell/`    | `error` (cross-cutting overlays, not tied to a tab) |
+| `projects/` | `projects`, `projects-empty`, `projects-loading`, `add-project`, `project` |
+| `shell/`    | `error`, `loading` (cross-cutting, not tied to a tab) |
 
 **The invariant (must always hold):**
 1. **Every `DEV_VIEW` has a mock AND a committed screenshot.** Adding a `DevView` variant

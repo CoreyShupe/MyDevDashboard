@@ -53,7 +53,7 @@ impl ProjectsState {
             }
             self.open_project = None; // it vanished; fall back to the grid
         }
-        self.render_grid(ui, projects);
+        self.render_grid(ui, bridge, projects);
     }
 
     /// Projects overlays: add-project, confirm-delete, and the create-worktree picker. Rendered

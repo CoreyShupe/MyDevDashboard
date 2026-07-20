@@ -55,6 +55,10 @@ pub struct DashboardApp {
     // owner switches profiles (so one profile's open modals don't bleed into another).
     active_profile_id: Option<Uuid>,
 
+    // False until the first worker snapshot lands. Until then we show a loading screen rather
+    // than flashing onboarding — an empty default `ViewData` looks identical to "no profile".
+    loaded: bool,
+
     // When a `DEV_VIEW` override is active, mock state is injected and worker snapshots are
     // ignored so the forced screen stays put (AGENTS.md §8).
     dev_mode: bool,
@@ -74,6 +78,7 @@ impl DashboardApp {
             error: None,
             new_profile_flow: false,
             active_profile_id: None,
+            loaded: false,
             dev_mode: false,
         };
         app.apply_dev_overrides();
@@ -86,6 +91,7 @@ impl DashboardApp {
             return;
         };
         self.dev_mode = true;
+        self.loaded = true; // mock state stands in for a snapshot; never show the loading screen
         match view {
             dev::DevView::Onboarding => {} // default state (no profiles) shows first-run onboarding
             dev::DevView::NewProfile => {
@@ -127,6 +133,13 @@ impl DashboardApp {
                 self.data = Rc::new(dev::mock_board());
                 self.active_tab = Tab::Projects;
             }
+            dev::DevView::ProjectsLoading => {
+                let mut data = dev::mock_board();
+                data.projects.refreshing = true; // git fetch in flight → cards show spinners
+                self.data = Rc::new(data);
+                self.active_tab = Tab::Projects;
+            }
+            dev::DevView::Loading => self.loaded = false, // show the pre-snapshot loading screen
             dev::DevView::AddProject => {
                 self.data = Rc::new(dev::mock_board());
                 self.projects.dev_open_add_project();
@@ -191,6 +204,7 @@ impl DashboardApp {
         for msg in self.bridge.drain() {
             match msg {
                 AppMessage::Snapshot(data) => {
+                    self.loaded = true; // real state has arrived; leave the loading screen
                     let data = Rc::new(data);
                     // Switching profiles swaps the whole workspace — drop transient board/notes
                     // state so one profile's open modals/buffers don't carry into another.
@@ -318,6 +332,23 @@ impl DashboardApp {
         }
     }
 
+    /// The full-window loading screen shown before the first snapshot lands. A centered spinner
+    /// (which self-animates by requesting repaints) over the grid backdrop, so a slow DB connect
+    /// or the initial git warm reads as "loading", never as an empty first-run app.
+    fn render_loading(&self, ui: &mut egui::Ui) {
+        let p = theme::palette();
+        ui.vertical_centered(|ui| {
+            ui.add_space(ui.available_height() * 0.42);
+            ui.add(egui::Spinner::new().size(34.0).color(p.accent));
+            ui.add_space(14.0);
+            ui.label(
+                egui::RichText::new("Loading your workspace…")
+                    .color(p.muted)
+                    .size(14.0),
+            );
+        });
+    }
+
     /// A blocking error alert: dims the app and traps input (AGENTS.md §3).
     ///
     /// For retryable (database) errors it offers a **Retry** button that re-attempts the
@@ -393,6 +424,16 @@ impl eframe::App for DashboardApp {
 
         // Infinite grid backdrop, painted under every panel (panels below are transparent).
         theme::paint_background(&ctx);
+
+        // Until the first snapshot arrives, show a loading screen — NOT onboarding. An empty
+        // default `ViewData` is indistinguishable from "no profile", so without this gate a slow
+        // DB connect would flash the first-run flow before real data lands. Errors still surface
+        // (the modal renders below), so a failed connect isn't hidden behind the spinner.
+        if !self.loaded {
+            self.render_loading(ui);
+            self.render_error_modal(&ctx);
+            return;
+        }
 
         // Three top-level screens: first-run onboarding (no profiles), the "new profile" create
         // screen (opened from the switcher), or the dashboard for the active profile.

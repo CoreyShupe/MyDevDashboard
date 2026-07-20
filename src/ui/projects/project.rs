@@ -35,8 +35,14 @@ impl NewProjectModal {
 }
 
 impl ProjectsState {
-    /// The grid: a header (title + "Add project") and the wrapping cards, or an empty state.
-    pub(super) fn render_grid(&mut self, ui: &mut egui::Ui, projects: &ProjectsView) {
+    /// The grid: a header (title + "Add project" + "Refresh" + last-checked time) and the
+    /// wrapping cards, or an empty state.
+    pub(super) fn render_grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        bridge: &Bridge,
+        projects: &ProjectsView,
+    ) {
         let muted = theme::palette().muted;
 
         ui.horizontal(|ui| {
@@ -44,6 +50,25 @@ impl ProjectsState {
             ui.add_space(16.0);
             if button::primary(ui, &format!("{} Add project", theme::icon::ADD)).clicked() {
                 self.adding = Some(NewProjectModal::default());
+            }
+            ui.add_space(6.0);
+            if button::secondary(ui, &format!("{} Refresh git", theme::icon::REFRESH)).clicked() {
+                bridge.send(crate::app::projects::Event::refresh_status());
+            }
+            ui.add_space(8.0);
+            // While a refresh runs, a spinner (git is fetched in the background, off this thread);
+            // otherwise the status is a session-cached snapshot, so say when it was last checked
+            // rather than implying it's live.
+            if projects.refreshing {
+                ui.add(egui::Spinner::new().size(14.0).color(muted));
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Fetching git status…")
+                        .color(muted)
+                        .size(12.5),
+                );
+            } else if let Some(label) = git_checked_label(projects) {
+                ui.label(egui::RichText::new(label).color(muted).size(12.5));
             }
         });
         ui.add_space(10.0);
@@ -73,7 +98,7 @@ impl ProjectsState {
                 ui.horizontal_wrapped(|ui| {
                     for c in &projects.projects {
                         let live = projects.live_count_for_project(c.project.id);
-                        if render_card(ui, c, live) {
+                        if render_card(ui, c, live, projects.refreshing) {
                             open = Some(c.project.id);
                         }
                     }
@@ -111,7 +136,12 @@ impl ProjectsState {
                 ui.horizontal(|ui| {
                     ui.heading(&c.project.name);
                     ui.add_space(10.0);
-                    git_badge(ui, &c.git);
+                    git_badge(ui, &c.git, projects.refreshing);
+                    ui.add_space(10.0);
+                    if button::ghost(ui, &format!("{} Refresh git", theme::icon::REFRESH)).clicked()
+                    {
+                        bridge.send(crate::app::projects::Event::refresh_status());
+                    }
                 });
                 ui.add_space(12.0);
 
@@ -120,7 +150,7 @@ impl ProjectsState {
                 ui.spacing_mut().item_spacing.x = 40.0;
                 ui.columns(2, |cols| {
                     cols[0].spacing_mut().item_spacing.x = 8.0;
-                    delete = render_meta(&mut cols[0], c);
+                    delete = render_meta(&mut cols[0], c, projects.refreshing);
 
                     cols[1].spacing_mut().item_spacing.x = 8.0;
                     worktree::render_project_worktrees(&mut cols[1], bridge, id, projects, tasks);
@@ -278,7 +308,7 @@ impl ProjectsState {
 }
 
 /// Render one project card. Returns true if the card was clicked (open its detail).
-fn render_card(ui: &mut egui::Ui, c: &ProjectCard, live_worktrees: usize) -> bool {
+fn render_card(ui: &mut egui::Ui, c: &ProjectCard, live_worktrees: usize, loading: bool) -> bool {
     let muted = theme::palette().muted;
 
     let response = card::card(ui, |ui| {
@@ -286,7 +316,7 @@ fn render_card(ui: &mut egui::Ui, c: &ProjectCard, live_worktrees: usize) -> boo
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&c.project.name).strong().size(16.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                git_badge(ui, &c.git);
+                git_badge(ui, &c.git, loading);
             });
         });
         ui.add_space(6.0);
@@ -332,10 +362,23 @@ fn meta_line(ui: &mut egui::Ui, glyph: char, value: Option<&str>) {
     });
 }
 
-/// A compact, color-coded git badge: teal "up to date", muted sync summary, or a red "not a
-/// repo". This is the at-a-glance card/header indicator.
-fn git_badge(ui: &mut egui::Ui, git: &GitStatus) {
+/// A compact, color-coded git badge: a spinner while a refresh is in flight, then teal "up to
+/// date", a muted sync summary, or a red "not a repo". This is the at-a-glance card/header
+/// indicator. `loading` shows the spinner regardless of the (about-to-change) status.
+fn git_badge(ui: &mut egui::Ui, git: &GitStatus, loading: bool) {
     let p = theme::palette();
+    if loading {
+        ui.add(egui::Spinner::new().size(13.0).color(p.muted));
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new("checking…").color(p.muted).size(12.0));
+        return;
+    }
+    if git.checked_at.is_none() {
+        // Never fetched this session (e.g. just switched to this profile) — don't claim "not a
+        // repo" when we simply haven't looked yet.
+        ui.label(egui::RichText::new("not checked").color(p.muted).size(12.0));
+        return;
+    }
     if !git.is_repo {
         ui.label(egui::RichText::new("not a repo").color(p.danger).size(12.0));
         return;
@@ -356,8 +399,9 @@ fn git_badge(ui: &mut egui::Ui, git: &GitStatus) {
 }
 
 /// Left column of the detail page: repository metadata, git status detail, and delete. Returns
-/// true if "Delete project" was clicked.
-fn render_meta(ui: &mut egui::Ui, c: &ProjectCard) -> bool {
+/// true if "Delete project" was clicked. `refreshing` swaps the git status for a loading line
+/// while a background fetch is in flight.
+fn render_meta(ui: &mut egui::Ui, c: &ProjectCard, refreshing: bool) -> bool {
     let p = theme::palette();
 
     section_label(ui, "Repository");
@@ -367,7 +411,17 @@ fn render_meta(ui: &mut egui::Ui, c: &ProjectCard) -> bool {
 
     ui.add_space(6.0);
     section_label(ui, "Git status");
-    if !c.git.is_repo {
+    if refreshing {
+        ui.horizontal(|ui| {
+            ui.add(egui::Spinner::new().size(14.0).color(p.muted));
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("Fetching git status…").color(p.muted));
+        });
+    } else if c.git.checked_at.is_none() {
+        ui.label(
+            egui::RichText::new("Not checked yet — Refresh to load git status.").color(p.muted),
+        );
+    } else if !c.git.is_repo {
         ui.label(egui::RichText::new("This path is not a git repository.").color(p.danger));
     } else {
         let working = if c.git.clean {
@@ -393,6 +447,16 @@ fn render_meta(ui: &mut egui::Ui, c: &ProjectCard) -> bool {
             .color(p.muted)
             .size(12.0),
         );
+        if let Some(at) = c.git.checked_at {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Checked {}. Refresh to re-fetch.",
+                    format_checked(at)
+                ))
+                .color(p.muted)
+                .size(12.0),
+            );
+        }
     }
 
     ui.add_space(16.0);
@@ -416,4 +480,21 @@ fn sync_summary(git: &GitStatus) -> String {
     } else {
         parts.join(" · ")
     }
+}
+
+/// A muted "Checked HH:MM" header label from the most recent `checked_at` across projects.
+/// `None` when there are no projects, or none checked yet (the header omits it then).
+fn git_checked_label(projects: &ProjectsView) -> Option<String> {
+    let latest = projects
+        .projects
+        .iter()
+        .filter_map(|c| c.git.checked_at)
+        .max()?;
+    Some(format!("Checked {}", format_checked(latest)))
+}
+
+/// Format a UTC check time in the owner's local time, compact (HH:MM). The status is a
+/// session-cached read, so the UI shows when it was taken rather than implying it's live.
+fn format_checked(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.with_timezone(&chrono::Local).format("%H:%M").to_string()
 }

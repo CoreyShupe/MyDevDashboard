@@ -54,10 +54,17 @@ impl Worker {
         Ok(backend)
     }
 
-    /// Ensure the connection, then push a fresh snapshot (or surface a connection error).
+    /// Ensure the connection, then push a fresh snapshot (or surface a connection error). Git is
+    /// warmed once on open (AGENTS.md §10), but **off** the event loop: `spawn_git_refresh` marks
+    /// the projects as refreshing and spawns the (possibly network-bound) fetch, so the Postgres
+    /// data lands in the very first snapshot and the projects tab just shows a loading state until
+    /// git reports back. Every later snapshot reads the cache until the owner hits Refresh.
     async fn refresh(&mut self) {
         match self.ensure_backend().await {
-            Ok(backend) => self.emitter.snapshot(&backend).await,
+            Ok(backend) => {
+                projects::spawn_git_refresh(&backend, &self.emitter);
+                self.emitter.snapshot(&backend).await;
+            }
             Err(e) => self.emitter.error(&e),
         }
     }

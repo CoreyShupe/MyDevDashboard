@@ -1,8 +1,12 @@
 //! `projects::project` part — business logic. Owns DB access for the `projects` table, plus
 //! the live git-status reads that enrich each project (delegated to [`super::git`]).
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
+use chrono::Utc;
 use sqlx::postgres::PgPool;
 use uuid::Uuid;
 
@@ -11,14 +15,29 @@ use crate::error::{AppError, DbError, ProjectError};
 
 use super::git;
 
+/// Git status per repo path, refreshed together and stamped with one check time.
+type StatusCache = HashMap<String, GitStatus>;
+
 #[derive(Clone)]
 pub struct ProjectService {
     pool: PgPool,
+    /// Session cache of git status per repo path. Git is a (possibly network-bound) shell-out,
+    /// so it runs only on open + on explicit refresh (AGENTS.md §10); every other snapshot reads
+    /// this cache instead of re-fetching. `Arc` so all `Backend` clones share one cache.
+    status_cache: Arc<Mutex<StatusCache>>,
+    /// Whether a git refresh is in flight. Surfaced in the `View` so the projects tab can show a
+    /// loading state; a CAS guard (see [`begin_refresh`](Self::begin_refresh)) keeps concurrent
+    /// refreshes from piling up. `Arc` so all `Backend` clones observe the same flag.
+    refreshing: Arc<AtomicBool>,
 }
 
 impl ProjectService {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            status_cache: Arc::new(Mutex::new(HashMap::new())),
+            refreshing: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     /// All projects in a profile, newest first (most-recently added on top).
@@ -113,9 +132,55 @@ impl ProjectService {
         Ok(())
     }
 
-    /// Live git status for a set of project paths, concurrently and order-preserving. Never
+    /// The cached git status for each path, order-preserving. Never shells out — returns the
+    /// last [`refresh_statuses`](Self::refresh_statuses) result, or an unchecked default
+    /// (`checked_at = None`) for a path not refreshed yet this session. This is what every
+    /// snapshot uses, so a mutation doesn't pay for a `git fetch`.
+    pub fn cached_statuses(&self, paths: &[String]) -> Vec<GitStatus> {
+        let cache = self.lock_cache();
+        paths
+            .iter()
+            .map(|p| cache.get(p).cloned().unwrap_or_default())
+            .collect()
+    }
+
+    /// Refetch live git status for these paths — the (network) `git fetch` + reads — concurrently
+    /// and order-preserving, stamp each with the check time, and update the cache. The ONLY path
+    /// that shells out for status; called on open and on explicit refresh (AGENTS.md §10). Never
     /// errors (see [`git::status`]).
-    pub async fn statuses(&self, paths: Vec<String>) -> Vec<GitStatus> {
-        git::statuses(paths).await
+    pub async fn refresh_statuses(&self, paths: Vec<String>) {
+        let now = Utc::now();
+        let statuses = git::statuses(paths.clone()).await;
+        let mut cache = self.lock_cache();
+        for (path, mut status) in paths.into_iter().zip(statuses) {
+            status.checked_at = Some(now);
+            cache.insert(path, status);
+        }
+    }
+
+    /// Whether a git refresh is currently in flight (drives the projects tab's loading state).
+    pub fn is_refreshing(&self) -> bool {
+        self.refreshing.load(Ordering::Acquire)
+    }
+
+    /// Try to claim the "refreshing" flag. Returns `true` if this call started a refresh, or
+    /// `false` if one was already running — so callers can skip spawning a duplicate fetch.
+    pub fn begin_refresh(&self) -> bool {
+        self.refreshing
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Release the "refreshing" flag once a refresh finishes.
+    pub fn end_refresh(&self) {
+        self.refreshing.store(false, Ordering::Release);
+    }
+
+    /// Lock the status cache, recovering the guard if a previous holder panicked (a poisoned
+    /// mutex must not take the whole app down — §3 bans `unwrap`/`expect` in app code).
+    fn lock_cache(&self) -> std::sync::MutexGuard<'_, StatusCache> {
+        self.status_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }

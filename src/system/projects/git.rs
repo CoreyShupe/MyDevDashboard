@@ -96,6 +96,9 @@ pub async fn status(path: &str) -> GitStatus {
         ahead,
         behind,
         fetched,
+        // Stamped by `ProjectService::refresh_statuses` when this lands in the cache — the read
+        // itself doesn't know the wall-clock time, and keeping it here avoids a `Utc::now` per repo.
+        checked_at: None,
     }
 }
 

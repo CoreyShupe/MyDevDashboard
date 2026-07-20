@@ -12,6 +12,8 @@ pub enum Command {
     Create { name: String, path: String },
     /// Forget a project (its worktree rows cascade; the repo on disk is untouched).
     Delete { id: Uuid },
+    /// Refetch live git status for the active profile's projects (AGENTS.md §10).
+    RefreshStatus,
 }
 
 impl Command {
@@ -21,22 +23,45 @@ impl Command {
     pub fn delete(id: Uuid) -> Self {
         Self::Delete { id }
     }
+    pub fn refresh_status() -> Self {
+        Self::RefreshStatus
+    }
 }
 
 /// Perform a project command, then refresh or surface the error.
 pub async fn handle(backend: &Backend, emitter: &Emitter, cmd: Command) {
-    let result = match cmd {
+    match cmd {
         // A new project lands in the active profile (AGENTS.md §9).
-        Command::Create { name, path } => match crate::app::profile::active_id(backend).await {
-            Ok(profile_id) => backend
-                .projects
-                .project
-                .create(profile_id, &name, &path)
-                .await
-                .map(|_| ()),
-            Err(e) => Err(e),
-        },
-        Command::Delete { id } => backend.projects.project.delete(id).await,
-    };
-    emitter.settle(backend, result).await;
+        Command::Create { name, path } => {
+            let result = match crate::app::profile::active_id(backend).await {
+                Ok(profile_id) => backend
+                    .projects
+                    .project
+                    .create(profile_id, &name, &path)
+                    .await
+                    .map(|_| ()),
+                Err(e) => Err(e),
+            };
+            match result {
+                // Show the new card immediately, then load its git status in the background so
+                // its "checking" spinner resolves without blocking anything (AGENTS.md §10).
+                Ok(()) => {
+                    crate::app::projects::spawn_git_refresh(backend, emitter);
+                    emitter.snapshot(backend).await;
+                }
+                Err(e) => emitter.error(&e),
+            }
+        }
+        Command::Delete { id } => {
+            emitter
+                .settle(backend, backend.projects.project.delete(id).await)
+                .await;
+        }
+        // Kick a background git refresh (never blocks the loop) and snapshot now so the tab shows
+        // its loading state; the spawned fetch emits the settled snapshot when it lands.
+        Command::RefreshStatus => {
+            crate::app::projects::spawn_git_refresh(backend, emitter);
+            emitter.snapshot(backend).await;
+        }
+    }
 }

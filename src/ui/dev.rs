@@ -38,6 +38,10 @@ pub enum DevView {
     NotesFile,
     /// The Projects tab: a grid of repository cards.
     Projects,
+    /// The Projects tab mid-refresh: cards + header show the git-status loading spinner.
+    ProjectsLoading,
+    /// The pre-first-snapshot loading screen (shown before any data arrives).
+    Loading,
     /// The "add project" modal, open over the Projects grid (folder picker + name).
     AddProject,
     /// A single project's full-page detail (metadata + worktrees).
@@ -66,6 +70,8 @@ impl DevView {
             "notes" => Some(Self::Notes),
             "notes-file" => Some(Self::NotesFile),
             "projects" => Some(Self::Projects),
+            "projects-loading" => Some(Self::ProjectsLoading),
+            "loading" => Some(Self::Loading),
             "add-project" => Some(Self::AddProject),
             "project" => Some(Self::Project),
             "todos" => Some(Self::Todos),
@@ -208,6 +214,7 @@ pub fn mock_board() -> ViewData {
                 ahead: 0,
                 behind: 0,
                 fetched: true,
+                checked_at: Some(now),
             },
         },
         ProjectCard {
@@ -221,6 +228,7 @@ pub fn mock_board() -> ViewData {
                 ahead: 2,
                 behind: 1,
                 fetched: true,
+                checked_at: Some(now),
             },
         },
         ProjectCard {
@@ -234,6 +242,7 @@ pub fn mock_board() -> ViewData {
                 ahead: 0,
                 behind: 0,
                 fetched: false,
+                checked_at: Some(now),
             },
         },
     ];
@@ -294,6 +303,7 @@ pub fn mock_board() -> ViewData {
         projects: projects::View {
             projects: projects_cards,
             worktrees,
+            refreshing: false,
         },
         todos: todos::View { todos },
     }

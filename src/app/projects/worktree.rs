@@ -44,7 +44,7 @@ impl Command {
 }
 
 /// Perform a worktree command. Mutating commands settle to a fresh snapshot; `Open` changes no
-/// state, so it only surfaces an error (a snapshot would needlessly re-fetch every project).
+/// state, so it only surfaces an error (nothing to re-render).
 pub async fn handle(backend: &Backend, emitter: &Emitter, cmd: Command) {
     let result = match cmd {
         Command::Create {

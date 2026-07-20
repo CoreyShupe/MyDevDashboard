@@ -51,6 +51,9 @@ impl Event {
     pub fn open_worktree(id: Uuid) -> Self {
         Self::Worktree(worktree::Command::open(id))
     }
+    pub fn refresh_status() -> Self {
+        Self::Project(project::Command::refresh_status())
+    }
 }
 
 /// One project as the grid renders it: the stored project plus its live git status.
@@ -63,10 +66,12 @@ pub struct ProjectCard {
 /// The projects feature's slice of the rendered snapshot.
 #[derive(Debug, Clone, Default)]
 pub struct View {
-    /// Projects with their (live) git status, newest first.
+    /// Projects with their (cached) git status, newest first.
     pub projects: Vec<ProjectCard>,
     /// Every worktree across those projects — live ones and historical markers.
     pub worktrees: Vec<Worktree>,
+    /// Whether a git-status refresh is in flight — the tab shows a loading state while true.
+    pub refreshing: bool,
 }
 
 impl View {
@@ -78,7 +83,9 @@ impl View {
 
         let projects = service.project.list(profile_id).await?;
         let paths: Vec<String> = projects.iter().map(|p| p.path.clone()).collect();
-        let statuses = service.project.statuses(paths).await;
+        // Read the cached git status (refreshed on open + on demand) — never a fetch, so building
+        // a snapshot after any mutation stays instant (AGENTS.md §10).
+        let statuses = service.project.cached_statuses(&paths);
         let projects = projects
             .into_iter()
             .zip(statuses)
@@ -89,6 +96,7 @@ impl View {
         Ok(Self {
             projects,
             worktrees,
+            refreshing: service.project.is_refreshing(),
         })
     }
 
@@ -117,6 +125,45 @@ impl View {
             .filter(|w| w.is_live())
             .count()
     }
+}
+
+/// Kick off a non-blocking git refresh (AGENTS.md §10). If no refresh is already running, claim
+/// the "refreshing" flag and **spawn** the (possibly network-bound) fetch off the worker's event
+/// loop, so it never delays the Postgres snapshot, other mutations, or the UI thread. When the
+/// fetch lands it clears the flag and emits a fresh snapshot. The CALLER should emit a snapshot
+/// right after calling this so the UI shows the loading state immediately. No-op if a refresh is
+/// already in flight.
+pub fn spawn_git_refresh(backend: &Backend, emitter: &Emitter) {
+    if !backend.projects.project.begin_refresh() {
+        return; // one is already running; its snapshot will carry the results
+    }
+    let backend = backend.clone();
+    let emitter = emitter.clone();
+    tokio::spawn(async move {
+        if let Err(e) = refresh_git(&backend).await {
+            tracing::warn!(error = %e, "background git refresh failed; leaving status unchanged");
+        }
+        backend.projects.project.end_refresh();
+        emitter.snapshot(&backend).await;
+    });
+}
+
+/// Refetch live git status for the active profile's projects into the service cache (AGENTS.md
+/// §10). Best-effort + profile-scoped (§9); a no-op during onboarding (no active profile). The
+/// caller snapshots afterwards so the refreshed status reaches the UI.
+pub async fn refresh_git(backend: &Backend) -> Result<(), AppError> {
+    if let Some(profile) = backend.profile.active().await? {
+        let paths = backend
+            .projects
+            .project
+            .list(profile.id)
+            .await?
+            .into_iter()
+            .map(|p| p.path)
+            .collect();
+        backend.projects.project.refresh_statuses(paths).await;
+    }
+    Ok(())
 }
 
 /// Feature dispatch: route to the owning part. Kept tiny on purpose (AGENTS.md §4).

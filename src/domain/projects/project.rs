@@ -19,9 +19,10 @@ pub struct Project {
     pub updated_at: DateTime<Utc>,
 }
 
-/// A live, read-only snapshot of a repository's git state, computed off-thread at load time
-/// (never stored). All fields degrade gracefully: a non-repo, a missing remote, or a failed
-/// `git fetch` simply leaves the relevant field empty/false rather than erroring the load.
+/// A read-only snapshot of a repository's git state, computed off-thread. Cached for the
+/// session and refreshed on open + on demand (AGENTS.md §10) — `checked_at` records when. All
+/// fields degrade gracefully: a non-repo, a missing remote, or a failed `git fetch` simply
+/// leaves the relevant field empty/false rather than erroring the load.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitStatus {
     /// Whether `path` is actually a git repository. When false, the rest is meaningless.
@@ -40,6 +41,9 @@ pub struct GitStatus {
     /// Whether the ahead/behind counts reflect a successful `git fetch` (fresh vs. remote) or
     /// fell back to the last-known local refs (offline / fetch failed).
     pub fetched: bool,
+    /// When this status was last refreshed (a `git` read ran). `None` means it hasn't been
+    /// checked yet this session — the card shows "checking…" until the first refresh lands.
+    pub checked_at: Option<DateTime<Utc>>,
 }
 
 impl GitStatus {
