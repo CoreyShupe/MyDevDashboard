@@ -102,18 +102,24 @@ impl BoardState {
         }
 
         // On release over this column, take whichever payload is present and act on it.
+        //
+        // We must PEEK (non-consuming `payload::<T>`) to choose the type before taking: egui's
+        // `take_payload::<T>` removes the payload from storage and *then* downcasts, so calling
+        // it for the wrong type (e.g. `::<Uuid>` while a `StageDrag` is in flight) silently
+        // discards the payload — which is exactly why stage reorder never fired.
         if pointer_over && ui.input(|i| i.pointer.any_released()) {
-            if let Some(dragged) = egui::DragAndDrop::take_payload::<Uuid>(ctx) {
-                if from_other_stage(&dragged) {
+            if egui::DragAndDrop::payload::<Uuid>(ctx).is_some() {
+                if let Some(dragged) = egui::DragAndDrop::take_payload::<Uuid>(ctx)
+                    && from_other_stage(&dragged)
+                {
                     bridge.send(Event::move_ticket(*dragged, stage.id));
                 }
             } else if let Some(dragged) = egui::DragAndDrop::take_payload::<StageDrag>(ctx)
                 && dragged.0 != stage.id
             {
-                // Move the dragged stage into this drop target's slot, then persist the order.
-                // Take the target's ORIGINAL index first: computing it after removing the
-                // dragged id would place the item right back where it started (a no-op when the
-                // source sits just before the target — e.g. dropping stage 1 onto stage 2).
+                // Insert the dragged stage at the drop target's ORIGINAL index in the
+                // post-removal list. This gives the direction-aware behaviour: a stage dragged
+                // leftward onto the target lands to its LEFT; dragged rightward, to its RIGHT.
                 let mut ids: Vec<Uuid> = view.stages.iter().map(|s| s.id).collect();
                 let target = ids.iter().position(|&x| x == stage.id).unwrap_or(ids.len());
                 ids.retain(|&x| x != dragged.0);
