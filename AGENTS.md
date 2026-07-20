@@ -24,7 +24,8 @@ feature slices — `profile`, `tasks` (parts: `stage`, `ticket`, `note`), `notes
 (parts: `project`, `worktree`), `todos`. The **same feature name appears in every layer**. All
 DB/business logic lives behind a `*Service` in `system/`; `app/` is the only UI↔system channel;
 `ui/` never touches the DB. The **one** place the app shells out to external commands (git, the
-editor launcher) is `system/projects/git.rs` (§10). Full tree + dispatch pattern in §2.
+editor launcher, and a project's per-worktree setup script) is `system/projects/git.rs` (§10).
+Full tree + dispatch pattern in §2.
 
 **Where's the data?** In Postgres, reached only through `system/<feature>/`. Schema is in
 `static/migrations/NNNN_*.sql`. Everything is scoped to the **active profile** (§9).
@@ -44,7 +45,8 @@ allowlisted (it will prompt) — use the wrapper.
 
 `VIEW` ∈ `onboarding · new-profile · profile-select · board · board-empty · ticket · page ·
 create · stage-edit · confirm-delete · notes · notes-empty · notes-file · todos · todos-empty ·
-projects · projects-empty · projects-loading · projects-pulling · add-project · project · loading ·
+projects · projects-empty · projects-loading · projects-pulling · add-project · project ·
+setup-script · worktree-creating · loading ·
 error` (defined
 in `ui/dev.rs`; see §8). Every one has a committed screenshot under `static/screenshots/` (§11).
 **Never edit `dev-dash` itself** (trust boundary, §6).
@@ -89,7 +91,7 @@ can be turned into a todo, a ticket, or filed onto an existing ticket.
 |--------------------|-----------------------------------------|-------|
 | UI framework       | `egui` + `eframe` (0.35)                | Native macOS, immediate-mode. `App::ui`/`App::logic`, `Panel`, `Modal`. |
 | File dialogs       | `rfd` (0.15)                            | Native folder/file picker (macOS `NSOpenPanel`). "Add project" uses `pick_folder()` so the repo path is chosen, not typed — a folder is required by construction. |
-| Async runtime      | `tokio`                                 | Workers/tasks only. Features incl. `process` — the `projects` feature shells out to `git`/the editor launcher off-thread (§10); no git *library* crate is used. |
+| Async runtime      | `tokio`                                 | Workers/tasks only. Features incl. `process` — the `projects` feature shells out to `git`/the editor launcher/a project's setup script off-thread (§10); no git *library* crate is used. |
 | Database           | PostgreSQL (via Docker)                 | Local, persistent volume. |
 | DB driver          | `sqlx` (0.9, runtime-checked queries)   | Builds WITHOUT a live DB. Migrations embedded. |
 | Errors             | `thiserror` (enum + sub-enums)          | See §3. |
@@ -163,7 +165,8 @@ src/
 │   ├── tasks/              mod.rs `TasksService` = { stage, ticket, note } part-services.
 │   ├── notes/              NotesService — CRUD for the `uncategorized_notes` table.
 │   ├── projects/           mod.rs `ProjectsService` = { project, worktree }; git.rs = the ONE
-│   │                       external-command boundary (git reads/worktree ops + editor launch, §10).
+│   │                       external-command boundary (git reads/worktree ops + editor launch +
+│   │                       per-worktree setup-script run, §10).
 │   └── todos/              TodosService — CRUD + `set_done` for the `todos` table.
 │
 ├── app/                The BRIDGE + orchestration root. Root dispatch lives here.
@@ -176,7 +179,9 @@ src/
 │   ├── tasks/              mod.rs dispatches to parts: stage/ticket/note::{Command, handle()}.
 │   ├── notes/              notes::{Event, View, handle()}. `FileIntoTicket`/`FileIntoTodo` reach out.
 │   ├── projects/           mod.rs dispatches to parts: project/worktree::{Command, handle()}.
-│   │                       `View` = projects (with live GitStatus) + all worktrees.
+│   │                       `View` = projects (with live GitStatus) + all worktrees + the
+│   │                       in-flight worktree-provision set (`creating`). Off-loop worktree
+│   │                       create/recreate + setup-script run spawned here (§10).
 │   └── todos/              todos::{Event, View, handle()} — add / set_done / delete.
 │
 └── ui/                 PURE rendering. No DB. One folder per feature + the shell + kit.
@@ -187,8 +192,9 @@ src/
     ├── profile/            Onboarding "setup profile" screen + its transient UI state.
     ├── tasks/              mod.rs board + part renderers: stage.rs, ticket.rs, note.rs, modal.rs.
     ├── notes/              Notes tab: composer + note rows + the "Add to ticket" picker.
-    ├── projects/           Projects tab: card grid, project detail page, worktree rows +
-    │                       add-project / create-worktree modals.
+    ├── projects/           Projects tab: card grid, project detail page (setup-script section +
+    │                       live worktree rows), worktree loading/rows + add-project /
+    │                       create-worktree / edit-setup-script modals.
     └── todos/              Todos tab: composer + open-todo rows (done checkbox + delete).
 ```
 (`static/assets/fonts/Nunito.ttf` — SIL OFL, embedded via `include_bytes!`. Not a crate.)
@@ -522,12 +528,15 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 | `projects-loading` | Projects tab mid-refresh — cards + header show the git-status spinner |
 | `projects-pulling` | Projects tab with a one-click Pull in flight — the card's "Pulling…" spinner |
 | `add-project`    | The "add project" modal over the grid (native folder picker + name) |
-| `project`        | A project's full-page detail (metadata + live + removed worktrees) |
+| `project`        | A project's full-page detail (metadata + setup script + worktrees) |
+| `setup-script`   | The "edit setup script" modal over the project detail (per-worktree bash) |
+| `worktree-creating` | Ticket detail with a worktree mid-provision — its setup-script spinner |
 | `loading`        | The pre-first-snapshot loading screen (spinner before any data arrives) |
 | `error`          | The error modal |
 
 (The `board`/`ticket`/`page` mocks also carry projects + worktrees, so the ticket detail's
-worktree section renders under `DEV_VIEW=ticket`/`page`. The `*-empty` views share one
+worktree section renders under `DEV_VIEW=ticket`/`page`; one mock project carries a setup script
+so the `project`/`setup-script` views render it populated. The `*-empty` views share one
 `dev::mock_empty()` — a profile with no feature data — differing only by active tab.)
 
 **When you add a screen/feature, add a `DevView` variant + mock to `ui/dev.rs`** (and a row
@@ -665,20 +674,46 @@ never deviate) and is tied **1:1 to a ticket** within a project:
 - **Delete leaves a marker.** Removing a worktree (via the UI, or the cleanup on ticket delete)
   runs `git worktree remove` (NOT forced — a dirty tree makes git refuse, and that surfaces so
   nothing is lost) and sets `removed_at`, keeping the row as a **historical marker** of the
-  branch name. It can be **recreated** from that marker (same branch + folder) from the ticket or
-  project detail.
+  branch name. It can be **recreated** from that marker (same branch + folder) — **only from the
+  ticket it originates from.** Recreation re-runs the setup script (removal deleted the folder, so
+  the provision is fresh — see below).
+- **Markers are ticket-only in the UI.** The project detail lists **live worktrees only** (what's
+  checked out right now); removed markers show exclusively on their originating ticket's detail,
+  which owns recreation. Don't surface markers on the project page.
 - **Reconcile against disk.** Before building a projects snapshot, `worktree::reconcile` flips
   any live worktree whose folder has vanished (owner deleted it outside the app) to a marker, so
   counts stay honest and it stays recreatable.
 - **Ticket delete cleans up.** Deleting a ticket first best-effort-removes its live worktree
   folders (`remove_all_for_ticket`) before the rows cascade away, avoiding orphaned folders.
 
+**Setup script (per project, run on worktree creation).** A project carries an optional
+`setup_script` (a `TEXT` column on `projects`, empty = none) — a bash script run in the working
+directory of every **freshly-provisioned** worktree, so a new checkout is ready to work in (e.g.
+`bun install`). Edited via a modal on the project detail (`SetSetupScript` → `set_setup_script`),
+shown ABOVE the worktrees in that column. Rules:
+- **Runs on a fresh provision only** — a first-time create OR a recreate (removal deleted the
+  folder), never on an ADOPTED existing folder (that was already set up). `git::run_setup_script`
+  is the boundary: `bash -c <script>` in the worktree dir, a typed `ProcessError` on non-zero exit.
+- **Provisioning is off-loop + shows a loading state.** git-add + the (possibly slow) setup script
+  never run on the worker's event loop — `app::projects::spawn_worktree_create` /
+  `spawn_worktree_recreate` spawn them, guarded per-`(project, ticket)` by
+  `WorktreeService::{begin,end}_create` (a double-click is a no-op). The in-flight set rides in
+  `projects::View::creating`; the ticket/project detail shows a "Setting up… running setup script"
+  spinner and the worktree is NOT presented as ready until it lands.
+- **A setup-script failure is NON-fatal.** The worktree is still created and tracked; the setup
+  error is surfaced in the modal (via `Emitter::settle_reload`, which always re-snapshots so the
+  worktree appears AND the error shows) so the owner can fix the script and re-run in place. Only a
+  git/DB provisioning failure is fatal (no worktree). Setup is therefore run as a SEPARATE step
+  (`worktree::run_setup`) AFTER `create`/`recreate` return `(Worktree, fresh)`, not inside
+  `provision`, so it can't roll back an already-created worktree.
+
 **Open in VS Code.** A worktree row's "Open in VS Code" launches `open -a "Visual Studio Code"
 <path>` off the worker thread. It changes no state, so its handler does **not** snapshot — it
-only surfaces an error on failure. This is the one non-git external command; it lives beside git
-in `system/projects/git.rs` and rolls up as `ProcessError` like git does.
+only surfaces an error on failure. It lives beside git in `system/projects/git.rs` (with the
+editor launch and the setup-script runner — the non-git external commands) and rolls up as
+`ProcessError` like git does.
 
-**Schema.** `projects` (profile-scoped, cascades) + `worktrees` (a churny, lightweight table:
+**Schema.** `projects` (profile-scoped, cascades; carries `setup_script`) + `worktrees` (a churny, lightweight table:
 `project_id`, `ticket_id`, `name`, `branch`, `removed_at`, with `UNIQUE(project_id, ticket_id)`
 and a partial-unique on active `(project_id, name)`). Both cascade from their parents. Keep the
 worktrees table lean — it takes common hard creates/deletes.
@@ -703,7 +738,7 @@ tables + inline thumbnails); regenerate/extend it alongside the images.
 | `tasks/`    | `board`, `board-empty`, `ticket`, `page`, `create`, `stage-edit` |
 | `notes/`    | `notes`, `notes-empty`, `notes-file` |
 | `todos/`    | `todos`, `todos-empty` |
-| `projects/` | `projects`, `projects-empty`, `projects-loading`, `projects-pulling`, `add-project`, `project` |
+| `projects/` | `projects`, `projects-empty`, `projects-loading`, `projects-pulling`, `add-project`, `project`, `setup-script`, `worktree-creating` |
 | `shell/`    | `error`, `loading`, `confirm-delete` (cross-cutting, not tied to a tab) |
 
 **The invariant (must always hold):**

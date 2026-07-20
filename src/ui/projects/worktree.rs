@@ -30,8 +30,10 @@ impl NewWorktreeModal {
     }
 }
 
-/// The right column of the project detail page: this project's worktrees, live first, then
-/// removed (recreatable) markers. Live rows open in VS Code or remove; markers recreate.
+/// The right column of the project detail page: this project's LIVE worktrees only. Removed
+/// (recreatable) markers are deliberately NOT shown here — they live on the ticket they originate
+/// from, which owns recreation; the project view is just "what's checked out right now". Live rows
+/// open in VS Code or remove.
 pub(super) fn render_project_worktrees(
     ui: &mut egui::Ui,
     bridge: &Bridge,
@@ -50,41 +52,43 @@ pub(super) fn render_project_worktrees(
     ui.add_space(8.0);
 
     let repo_path = projects.project(project_id).map(|c| c.project.path.clone());
-    let all: Vec<&Worktree> = projects.worktrees_for_project(project_id).collect();
-    if all.is_empty() {
+    let live: Vec<&Worktree> = projects
+        .worktrees_for_project(project_id)
+        .filter(|w| w.is_live())
+        .collect();
+
+    // Worktrees being provisioned in THIS project with no live row yet — a first-time create, or a
+    // recreate whose marker isn't shown here. A loading card each while git + the setup script run.
+    let creating_new: Vec<Uuid> = projects
+        .creating_for_project(project_id)
+        .filter(|tid| !live.iter().any(|w| w.ticket_id == *tid))
+        .collect();
+
+    if live.is_empty() && creating_new.is_empty() {
         ui.label(egui::RichText::new("No worktrees yet.").color(muted));
         return;
     }
 
-    for w in all.iter().filter(|w| w.is_live()) {
+    for ticket_id in &creating_new {
+        let title = tasks
+            .ticket(*ticket_id)
+            .map(|t| t.title.as_str())
+            .unwrap_or("(ticket removed)");
+        setup_loading_row(ui, title);
+    }
+
+    for w in &live {
         let title = tasks
             .ticket(w.ticket_id)
             .map(|t| t.title.as_str())
             .unwrap_or("(ticket removed)");
-        worktree_row(ui, bridge, w, title, repo_path.as_deref(), remove);
-    }
-
-    let markers: Vec<&&Worktree> = all.iter().filter(|w| !w.is_live()).collect();
-    if !markers.is_empty() {
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new("Removed — recreatable")
-                .color(muted)
-                .size(12.0),
-        );
-        ui.add_space(4.0);
-        for w in markers {
-            let title = tasks
-                .ticket(w.ticket_id)
-                .map(|t| t.title.as_str())
-                .unwrap_or("(ticket removed)");
-            worktree_row(ui, bridge, w, title, repo_path.as_deref(), remove);
-        }
+        worktree_row(ui, bridge, w, title, repo_path.as_deref(), remove, projects);
     }
 }
 
-/// One worktree row on the project detail page (keyed by its ticket). Live rows show Open +
-/// Remove; markers show Recreate. A Remove click is recorded into `remove` for confirmation.
+/// One LIVE worktree row on the project detail page (keyed by its ticket): Open in VS Code +
+/// Remove, or the setup spinner while it's mid-provision. A Remove click is recorded into `remove`
+/// for confirmation. (Markers aren't shown on the project page — they live on their ticket.)
 fn worktree_row(
     ui: &mut egui::Ui,
     bridge: &Bridge,
@@ -92,6 +96,7 @@ fn worktree_row(
     ticket_title: &str,
     repo_path: Option<&str>,
     remove: &mut Option<Uuid>,
+    projects: &ProjectsView,
 ) {
     let muted = theme::palette().muted;
     card::inset(ui, |ui| {
@@ -111,7 +116,13 @@ fn worktree_row(
             );
         }
         ui.add_space(6.0);
-        worktree_actions(ui, bridge, w, remove);
+        // While this worktree is being (re)created, its setup script may still be running — show
+        // the spinner and no actions until it lands (AGENTS.md §10).
+        if projects.is_creating(w.project_id, w.ticket_id) {
+            setup_indicator(ui);
+        } else {
+            worktree_actions(ui, bridge, w, remove);
+        }
     });
     ui.add_space(6.0);
 }
@@ -129,9 +140,23 @@ pub(crate) fn render_ticket_worktrees(
     let muted = theme::palette().muted;
     let worktrees: Vec<&Worktree> = projects.worktrees_for_ticket(ticket_id).collect();
 
-    if worktrees.is_empty() {
+    // First-time creations in a project this ticket has no row in yet — a loading card each while
+    // git + the setup script run (a recreate keeps its marker row and gets the in-row spinner).
+    let creating_new: Vec<Uuid> = projects
+        .creating_for_ticket(ticket_id)
+        .filter(|pid| !worktrees.iter().any(|w| w.project_id == *pid))
+        .collect();
+
+    if worktrees.is_empty() && creating_new.is_empty() {
         ui.label(egui::RichText::new("No worktrees for this ticket yet.").color(muted));
     } else {
+        for pid in &creating_new {
+            let project_name = projects
+                .project(*pid)
+                .map(|c| c.project.name.clone())
+                .unwrap_or_else(|| "(project removed)".to_owned());
+            setup_loading_row(ui, &project_name);
+        }
         for w in &worktrees {
             let project_name = projects
                 .project(w.project_id)
@@ -151,7 +176,13 @@ pub(crate) fn render_ticket_worktrees(
                         .size(12.5),
                 );
                 ui.add_space(6.0);
-                worktree_actions(ui, bridge, w, remove);
+                // Spinner while this worktree is being (re)created (its setup may still be running);
+                // otherwise the usual Open/Remove/Recreate actions (§10).
+                if projects.is_creating(w.project_id, w.ticket_id) {
+                    setup_indicator(ui);
+                } else {
+                    worktree_actions(ui, bridge, w, remove);
+                }
             });
             ui.add_space(6.0);
         }
@@ -189,6 +220,34 @@ fn worktree_actions(ui: &mut egui::Ui, bridge: &Bridge, w: &Worktree, remove: &m
         } else if button::secondary(ui, &format!("{} Recreate", theme::icon::ADD)).clicked() {
             bridge.send(Event::recreate_worktree(w.id));
         }
+    });
+}
+
+/// A full loading card for a worktree being provisioned that has no row yet (a first-time create):
+/// the label (project or ticket, depending on the caller) plus the setup spinner.
+fn setup_loading_row(ui: &mut egui::Ui, label: &str) {
+    card::inset(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(egui::RichText::new(label).strong());
+        ui.add_space(6.0);
+        setup_indicator(ui);
+    });
+    ui.add_space(6.0);
+}
+
+/// The in-flight "Setting up…" indicator shown while a worktree is being provisioned — git
+/// `worktree add` plus the project's setup script (e.g. `bun install`), which can take a while.
+/// Until it lands the worktree isn't presented as ready (AGENTS.md §10).
+fn setup_indicator(ui: &mut egui::Ui) {
+    let accent = theme::palette().accent;
+    ui.horizontal(|ui| {
+        ui.add(egui::Spinner::new().size(14.0).color(accent));
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new("Setting up… running setup script")
+                .color(accent)
+                .size(12.5),
+        );
     });
 }
 
@@ -262,7 +321,8 @@ impl ProjectsState {
             .next()
             .map(|w| w.branch.clone());
         // Eligible = projects with no worktree row for this ticket at all (markers get their own
-        // "Recreate" action in the lists, so they're excluded here).
+        // "Recreate" action in the lists, so they're excluded here), and none currently being
+        // provisioned for it (its loading row is already showing).
         let eligible: Vec<&ProjectCard> = projects
             .projects
             .iter()
@@ -270,6 +330,7 @@ impl ProjectsState {
                 !projects
                     .worktrees_for_ticket(ticket_id)
                     .any(|w| w.project_id == c.project.id)
+                    && !projects.is_creating(c.project.id, ticket_id)
             })
             .collect();
 

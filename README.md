@@ -155,13 +155,19 @@ OS-specific):
 | What | Where | macOS today | Elsewhere |
 |------|-------|-------------|-----------|
 | Open a worktree in VS Code | [`src/system/projects/git.rs`](src/system/projects/git.rs) → `open_in_vscode()` | `open -a "Visual Studio Code" <path>` | `code <path>`, or `xdg-open`/`start <path>` |
+| Run a project's setup script | [`src/system/projects/git.rs`](src/system/projects/git.rs) → `run_setup_script()` | `bash -c <script>` in the new worktree | any POSIX shell; on Windows swap for `cmd`/`pwsh` (or keep `bash` via Git-Bash/WSL) |
+
+A **project's setup script** is an optional bash snippet run in each newly-created worktree
+(e.g. `bun install`) so a fresh checkout is ready to work in — edit it from the project detail
+page. It runs off the UI thread with a loading indicator, and a failing script is surfaced in a
+modal but doesn't undo the worktree.
 
 Everything else in the app is already portable: all **git** operations shell out to `git`
 itself; the DB, UI, and workers are `sqlx`/`egui`/`tokio`; the **Add project** folder picker uses
 `rfd`, which draws native dialogs on every platform; the Nunito font is embedded; and the
-`{repo}/.github/worktrees/{name}` layout is a plain path. A failed "Open in VS Code" is already
-handled as a best-effort `ProcessError` (it surfaces, it doesn't crash), so the app is usable on
-other platforms even before you touch that call.
+`{repo}/.github/worktrees/{name}` layout is a plain path. A failed "Open in VS Code" or setup
+script is already handled as a best-effort/surfaced `ProcessError` (it shows, it doesn't crash),
+so the app is usable on other platforms even before you touch those calls.
 
 **In the `dev-dash` tooling — the screenshot helpers:**
 

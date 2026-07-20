@@ -51,8 +51,13 @@ pub enum DevView {
     Loading,
     /// The "add project" modal, open over the Projects grid (folder picker + name).
     AddProject,
-    /// A single project's full-page detail (metadata + worktrees).
+    /// A single project's full-page detail (metadata + setup script + worktrees).
     Project,
+    /// A project's detail page with the "edit setup script" modal open (the per-worktree bash).
+    SetupScript,
+    /// The ticket detail (full page) with a worktree being provisioned — its setup-script spinner
+    /// showing, so the worktree isn't yet presented as ready (§10).
+    WorktreeCreating,
     /// The Todos tab: quick tasks, one already checked off.
     Todos,
     /// Empty states (profile exists, but the feature has no data yet).
@@ -84,6 +89,8 @@ impl DevView {
             "loading" => Some(Self::Loading),
             "add-project" => Some(Self::AddProject),
             "project" => Some(Self::Project),
+            "setup-script" => Some(Self::SetupScript),
+            "worktree-creating" => Some(Self::WorktreeCreating),
             "todos" => Some(Self::Todos),
             "board-empty" => Some(Self::BoardEmpty),
             "notes-empty" => Some(Self::NotesEmpty),
@@ -224,18 +231,25 @@ pub fn mock_board() -> ViewData {
     // Projects + worktrees, exercising the grid states (up-to-date, out-of-sync, no-origin) and
     // the worktree section on the ticket detail (a ticket with two shared-branch worktrees plus
     // a removed marker). Worktrees link to real mock tickets so titles resolve.
-    let project = |name: &str, path: &str| Project {
+    let project = |name: &str, path: &str, setup_script: &str| Project {
         id: Uuid::new_v4(),
         profile_id: work_id,
         name: name.to_owned(),
         path: path.to_owned(),
+        setup_script: setup_script.to_owned(),
         created_at: now,
         updated_at: now,
     };
-    let dashboard = project("my-dev-dashboard", "/Users/you/Programming/MyDevDashboard");
-    let webapp = project("acme-web", "/Users/you/Programming/acme-web");
-    let api = project("acme-api", "/Users/you/Programming/acme-api");
-    let scratch = project("scratchpad", "/Users/you/Programming/scratchpad");
+    // One project carries a setup script (run inside each new worktree, §10) so the project
+    // detail + setup-script editor render populated; the rest have none (the common case).
+    let dashboard = project(
+        "my-dev-dashboard",
+        "/Users/you/Programming/MyDevDashboard",
+        "#!/usr/bin/env bash\nset -euo pipefail\n\nbun install\nbun run build",
+    );
+    let webapp = project("acme-web", "/Users/you/Programming/acme-web", "");
+    let api = project("acme-api", "/Users/you/Programming/acme-api", "");
+    let scratch = project("scratchpad", "/Users/you/Programming/scratchpad", "");
     let projects_cards = vec![
         // Shared branch (main) that's behind & clean → the one-click Pull button shows (§10).
         ProjectCard {
@@ -358,6 +372,7 @@ pub fn mock_board() -> ViewData {
             projects: projects_cards,
             worktrees,
             refreshing: false,
+            creating: Vec::new(),
         },
         todos: todos::View { todos },
     }

@@ -43,28 +43,40 @@ impl Command {
     }
 }
 
-/// Perform a worktree command. Mutating commands settle to a fresh snapshot; `Open` changes no
-/// state, so it only surfaces an error (nothing to re-render).
+/// Perform a worktree command.
+///
+/// `Create`/`Recreate` provision on disk AND run the project's setup script, which can be slow, so
+/// they're spawned off the worker loop with an in-flight loading state (AGENTS.md §10) rather than
+/// awaited inline — the worktree isn't shown as ready until its setup finishes. `Remove` settles
+/// inline (it's quick); `Open` changes no state, so it only surfaces an error.
 pub async fn handle(backend: &Backend, emitter: &Emitter, cmd: Command) {
-    let result = match cmd {
+    match cmd {
         Command::Create {
             project_id,
             ticket_id,
             branch,
-        } => backend
-            .projects
-            .worktree
-            .create(project_id, ticket_id, &branch)
-            .await
-            .map(|_| ()),
-        Command::Recreate { id } => backend.projects.worktree.recreate(id).await.map(|_| ()),
-        Command::Remove { id } => backend.projects.worktree.remove(id).await,
+        } => {
+            crate::app::projects::spawn_worktree_create(
+                backend, emitter, project_id, ticket_id, branch,
+            );
+            // Snapshot now so the ticket detail shows the "setting up…" loading row immediately;
+            // the spawned provision settles the ready worktree (or the error) when it lands.
+            emitter.snapshot(backend).await;
+        }
+        Command::Recreate { id } => {
+            // Recreate looks up its (project, ticket) asynchronously, so it emits the loading
+            // snapshot from within the spawned task itself.
+            crate::app::projects::spawn_worktree_recreate(backend, emitter, id);
+        }
+        Command::Remove { id } => {
+            emitter
+                .settle(backend, backend.projects.worktree.remove(id).await)
+                .await;
+        }
         Command::Open { id } => {
             if let Err(e) = backend.projects.worktree.open_in_editor(id).await {
                 emitter.error(&e);
             }
-            return; // no state change → no snapshot
         }
-    };
-    emitter.settle(backend, result).await;
+    }
 }

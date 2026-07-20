@@ -176,6 +176,48 @@ impl DashboardApp {
                 self.data = Rc::new(data);
                 self.active_tab = Tab::Projects;
             }
+            dev::DevView::SetupScript => {
+                let data = dev::mock_board();
+                // The first project (my-dev-dashboard) carries a setup script in the mock.
+                if let Some(card) = data.projects.projects.first() {
+                    self.projects
+                        .dev_open_setup_script(card.project.id, &card.project.setup_script);
+                }
+                self.data = Rc::new(data);
+                self.active_tab = Tab::Projects;
+            }
+            dev::DevView::WorktreeCreating => {
+                let mut data = dev::mock_board();
+                // Open the child ticket (as dev_open_ticket does) and mark a worktree as being
+                // provisioned in a project it has no worktree in yet, so its setup spinner shows.
+                let target = data
+                    .tasks
+                    .tickets
+                    .iter()
+                    .find(|t| t.parent_id.is_some())
+                    .or_else(|| data.tasks.tickets.first())
+                    .cloned();
+                if let Some(ticket) = target {
+                    let existing: Vec<uuid::Uuid> = data
+                        .projects
+                        .worktrees
+                        .iter()
+                        .filter(|w| w.ticket_id == ticket.id)
+                        .map(|w| w.project_id)
+                        .collect();
+                    let pid = data
+                        .projects
+                        .projects
+                        .iter()
+                        .map(|c| c.project.id)
+                        .find(|id| !existing.contains(id));
+                    if let Some(pid) = pid {
+                        data.projects.creating = vec![(pid, ticket.id)];
+                    }
+                    self.board.dev_open(&ticket, true);
+                }
+                self.data = Rc::new(data);
+            }
             dev::DevView::Todos => {
                 self.data = Rc::new(dev::mock_board());
                 self.active_tab = Tab::Todos;

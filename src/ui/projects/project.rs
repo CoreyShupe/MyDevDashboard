@@ -35,6 +35,30 @@ impl NewProjectModal {
     }
 }
 
+/// Draft state for the open "edit setup script" modal — the project being edited and the working
+/// copy of its bash script (run inside each new worktree, §10).
+pub(super) struct SetupScriptModal {
+    project_id: Uuid,
+    draft: String,
+}
+
+impl SetupScriptModal {
+    pub(super) fn new(project_id: Uuid, current: &str) -> Self {
+        Self {
+            project_id,
+            draft: current.to_owned(),
+        }
+    }
+
+    pub(super) fn project_id(&self) -> Uuid {
+        self.project_id
+    }
+
+    pub(super) fn script_mut(&mut self) -> &mut String {
+        &mut self.draft
+    }
+}
+
 impl ProjectsState {
     /// The grid: a header (title + "Add project" + "Refresh" + last-checked time) and the
     /// wrapping cards, or an empty state.
@@ -135,6 +159,7 @@ impl ProjectsState {
         ui.add_space(10.0);
 
         let mut delete = false;
+        let mut edit_setup_script = false;
         let mut remove_worktree: Option<Uuid> = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -171,6 +196,10 @@ impl ProjectsState {
                     delete = render_meta(&mut cols[0], c, projects.refreshing);
 
                     cols[1].spacing_mut().item_spacing.x = 8.0;
+                    // Setup script sits ABOVE the worktrees, in the same column — it governs what
+                    // runs whenever a worktree here is created (§10). Optional — empty = no setup.
+                    edit_setup_script = render_setup_script_section(&mut cols[1], c);
+                    cols[1].add_space(16.0);
                     worktree::render_project_worktrees(
                         &mut cols[1],
                         bridge,
@@ -184,6 +213,13 @@ impl ProjectsState {
 
         if delete {
             self.confirm_delete_project = Some(id);
+        }
+        if edit_setup_script {
+            let current = projects
+                .project(id)
+                .map(|c| c.project.setup_script.clone())
+                .unwrap_or_default();
+            self.editing_setup_script = Some(SetupScriptModal::new(id, &current));
         }
         if let Some(worktree_id) = remove_worktree {
             self.confirm_remove_worktree = Some(worktree_id);
@@ -313,6 +349,69 @@ impl ProjectsState {
             }
             Choice::Cancelled => self.confirm_delete_project = None,
             Choice::Pending => {}
+        }
+    }
+
+    /// The "edit setup script" modal: a multi-line bash editor for the script run inside each new
+    /// worktree (§10). Save persists it (even when emptied — that clears it); Cancel discards.
+    pub(super) fn render_setup_script_modal(
+        &mut self,
+        ctx: &egui::Context,
+        bridge: &Bridge,
+        projects: &ProjectsView,
+    ) {
+        let Some(draft) = self.editing_setup_script.as_mut() else {
+            return;
+        };
+        let project_id = draft.project_id();
+        let name = projects
+            .project(project_id)
+            .map(|c| c.project.name.clone())
+            .unwrap_or_default();
+        let muted = theme::palette().muted;
+        let mut save = false;
+        let mut cancel = false;
+
+        let response = egui::Modal::new(egui::Id::new(("setup_script_modal", project_id)))
+            .frame(theme::surface_frame())
+            .show(ctx, |ui| {
+                ui.set_min_width(560.0);
+                ui.heading("Setup script");
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Runs as a bash script in the working directory of every new worktree for \
+                         “{name}” — e.g. `bun install`. Optional: leave it empty for no setup.",
+                    ))
+                    .color(muted)
+                    .size(12.5),
+                );
+                ui.add_space(12.0);
+                input::text_area(
+                    ui,
+                    draft.script_mut(),
+                    "#!/usr/bin/env bash\nbun install",
+                    12,
+                );
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    save = button::primary(ui, &format!("{} Save", theme::icon::SAVE)).clicked();
+                    cancel = button::secondary(ui, "Cancel").clicked();
+                });
+            });
+
+        if response.should_close() {
+            cancel = true;
+        }
+
+        if save {
+            bridge.send(crate::app::projects::Event::set_setup_script(
+                project_id,
+                draft.script_mut().clone(),
+            ));
+            self.editing_setup_script = None;
+        } else if cancel {
+            self.editing_setup_script = None;
         }
     }
 }
@@ -469,6 +568,45 @@ fn git_badge(ui: &mut egui::Ui, git: &GitStatus, loading: bool) {
             .color(p.muted)
             .size(12.0),
     );
+}
+
+/// The full-width setup-script panel on the detail page, above the worktrees. Shows the current
+/// script (or a muted "no script" hint) and an Edit button. Returns true if Edit was clicked.
+fn render_setup_script_section(ui: &mut egui::Ui, c: &ProjectCard) -> bool {
+    let p = theme::palette();
+    let script = c.project.setup_script.trim();
+
+    section_label(ui, "Setup script");
+    ui.label(
+        egui::RichText::new(
+            "Runs as a bash script inside each new worktree (e.g. `bun install`). Optional.",
+        )
+        .color(p.muted)
+        .size(12.0),
+    );
+    ui.add_space(8.0);
+
+    card::inset(ui, |ui| {
+        ui.set_width(ui.available_width());
+        if script.is_empty() {
+            ui.label(
+                egui::RichText::new("No setup script — new worktrees are left as-is.")
+                    .color(p.muted)
+                    .italics(),
+            );
+        } else {
+            // Show the script verbatim in monospace so it reads as code, not prose.
+            ui.label(egui::RichText::new(script).monospace().size(12.5));
+        }
+    });
+    ui.add_space(8.0);
+
+    let label = if script.is_empty() {
+        format!("{} Add setup script", theme::icon::EDIT)
+    } else {
+        format!("{} Edit setup script", theme::icon::EDIT)
+    };
+    button::secondary(ui, &label).clicked()
 }
 
 /// Left column of the detail page: repository metadata, git status detail, and delete. Returns

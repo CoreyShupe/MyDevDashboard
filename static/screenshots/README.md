@@ -87,7 +87,9 @@ Local repositories + their git worktrees.
 | Projects grid mid git-status refresh (spinners) | `projects-loading` |
 | Projects grid with a one-click Pull in flight ("Pulling…") | `projects-pulling` |
 | Add-project modal (folder picker + name) | `add-project` |
-| Project detail (metadata + live + removed worktrees) | `project` |
+| Project detail (setup script + metadata + live/removed worktrees) | `project` |
+| Edit-setup-script modal (per-worktree bash) | `setup-script` |
+| Ticket detail with a worktree mid-setup (spinner) | `worktree-creating` |
 
 ![projects](projects/projects.png)
 ![projects-empty](projects/projects-empty.png)
@@ -95,6 +97,8 @@ Local repositories + their git worktrees.
 ![projects-pulling](projects/projects-pulling.png)
 ![add-project](projects/add-project.png)
 ![project](projects/project.png)
+![setup-script](projects/setup-script.png)
+![worktree-creating](projects/worktree-creating.png)
 
 ## shell
 

@@ -7,6 +7,9 @@
 //!   ticket's existing branch, ignoring the requested one, when there already is one).
 //! - Removal leaves a marker (`removed_at` set, folder cleaned); recreation revives the marker.
 
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
+
 use sqlx::postgres::PgPool;
 use uuid::Uuid;
 
@@ -19,11 +22,47 @@ use super::git;
 #[derive(Clone)]
 pub struct WorktreeService {
     pool: PgPool,
+    /// Worktrees currently being provisioned, keyed by `(project_id, ticket_id)`. Provisioning
+    /// shells out to git AND runs the project's (possibly slow) setup script, so it's spawned off
+    /// the worker loop and this guard surfaces the in-flight state in the `View` — the ticket/
+    /// project detail shows a loading row until it lands, and the worktree isn't presented as ready
+    /// until setup has finished (AGENTS.md §10). `Arc` so all `Backend` clones share one set; the
+    /// guard also dedupes a double-click into a single provision.
+    creating: Arc<Mutex<HashSet<(Uuid, Uuid)>>>,
 }
 
 impl WorktreeService {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            creating: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    /// Try to claim the "creating" guard for a `(project, ticket)` worktree. Returns `true` if this
+    /// call started the provision, or `false` if one was already in flight — so callers skip
+    /// spawning a duplicate `git worktree add` + setup run for the same worktree.
+    pub fn begin_create(&self, project_id: Uuid, ticket_id: Uuid) -> bool {
+        self.lock_creating().insert((project_id, ticket_id))
+    }
+
+    /// Release a worktree's "creating" guard once its provision finishes (success or failure).
+    pub fn end_create(&self, project_id: Uuid, ticket_id: Uuid) {
+        self.lock_creating().remove(&(project_id, ticket_id));
+    }
+
+    /// The `(project_id, ticket_id)` pairs whose worktree is being provisioned right now (drives
+    /// the loading rows in the ticket + project detail views).
+    pub fn creating_ids(&self) -> HashSet<(Uuid, Uuid)> {
+        self.lock_creating().clone()
+    }
+
+    /// Lock the creating set, recovering a poisoned guard (a poisoned mutex must not crash the app
+    /// — §3 bans `unwrap`/`expect`), same policy as the project service's caches.
+    fn lock_creating(&self) -> std::sync::MutexGuard<'_, HashSet<(Uuid, Uuid)>> {
+        self.creating
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Every worktree (live AND historical markers) across a profile's projects, oldest first.
@@ -59,12 +98,17 @@ impl WorktreeService {
 
     /// Create a worktree for a ticket in a project. `requested_branch` is used ONLY when the
     /// ticket has no worktree yet; otherwise the ticket's existing (shared) branch wins.
+    ///
+    /// Returns the worktree AND whether it was *freshly* provisioned (`true`) vs. an existing
+    /// folder adopted (`false`) — the caller runs [`run_setup`](Self::run_setup) only when fresh.
+    /// Setup is deliberately NOT run here so a failing setup script can't undo an
+    /// already-created worktree (AGENTS.md §10).
     pub async fn create(
         &self,
         project_id: Uuid,
         ticket_id: Uuid,
         requested_branch: &str,
-    ) -> Result<Worktree, AppError> {
+    ) -> Result<(Worktree, bool), AppError> {
         // Branch is a ticket-level choice, shared across projects (AGENTS.md §10).
         let branch = match self.branch_for_ticket(ticket_id).await? {
             Some(existing) => existing,
@@ -101,10 +145,33 @@ impl WorktreeService {
     }
 
     /// Recreate a previously-removed worktree from its historical marker (same branch + folder).
-    pub async fn recreate(&self, id: Uuid) -> Result<Worktree, AppError> {
+    /// Since removal deleted the folder, this provisions afresh (returns `fresh = true`), so the
+    /// caller re-runs the project's setup script, just like a first creation (AGENTS.md §10).
+    pub async fn recreate(&self, id: Uuid) -> Result<(Worktree, bool), AppError> {
         let row = self.row(id).await?;
         self.provision(row.project_id, row.ticket_id, &row.name, &row.branch)
             .await
+    }
+
+    /// Run the project's setup script inside a worktree's folder (e.g. `bun install`), if the
+    /// project has one (an empty script is a no-op). Called by the app layer AFTER a fresh
+    /// provision, as a SEPARATE step so its failure surfaces to the owner without undoing the
+    /// already-created worktree — the worktree still "succeeds", the error is just shown so they
+    /// can fix it and re-run (AGENTS.md §10).
+    pub async fn run_setup(&self, worktree: &Worktree) -> Result<(), AppError> {
+        let (repo, script) = self.project_path_and_script(worktree.project_id).await?;
+        if script.trim().is_empty() {
+            return Ok(());
+        }
+        git::run_setup_script(&worktree_path(&repo, &worktree.name), &script).await?;
+        Ok(())
+    }
+
+    /// The `(project_id, ticket_id)` a worktree row belongs to — used to key the in-flight
+    /// "creating" guard when recreating (which only has the worktree id to start from).
+    pub async fn ids_of(&self, id: Uuid) -> Result<(Uuid, Uuid), AppError> {
+        let row = self.row(id).await?;
+        Ok((row.project_id, row.ticket_id))
     }
 
     /// Remove a live worktree: clean the folder via git, then leave the row as a marker. If git
@@ -196,16 +263,18 @@ impl WorktreeService {
         Ok(())
     }
 
-    /// Create the on-disk worktree (new branch or existing) and upsert its row (reviving a
-    /// marker if one exists for this project+ticket). Git runs FIRST: a git failure leaves no
-    /// row, so the DB never claims a worktree that isn't there.
+    /// Create the on-disk worktree (new branch or existing) and upsert its row (reviving a marker
+    /// if one exists for this project+ticket). Git runs FIRST: a git failure leaves no row, so the
+    /// DB never claims a worktree that isn't there. Returns the row plus whether it was *freshly*
+    /// created (`true`) vs. an existing folder adopted (`false`) so the caller knows whether to run
+    /// the setup script. Setup is intentionally NOT run here (see [`create`](Self::create)).
     async fn provision(
         &self,
         project_id: Uuid,
         ticket_id: Uuid,
         name: &str,
         branch: &str,
-    ) -> Result<Worktree, AppError> {
+    ) -> Result<(Worktree, bool), AppError> {
         let repo = self.project_path(project_id).await?;
         let path = worktree_path(&repo, name);
         // If the target folder already exists, adopt it as-is: skip `git worktree add` (and branch
@@ -213,12 +282,13 @@ impl WorktreeService {
         // cascade-deleted (deleting a profile or project drops worktree ROWS but not folders —
         // §9, §10); git would otherwise error on the existing path. We trust the structure is set
         // up for us and just (re)create the tracking row below.
-        if !path.exists() {
+        let fresh = !path.exists();
+        if fresh {
             let new_branch = !git::branch_exists(&repo, branch).await;
             git::worktree_add(&repo, &path, branch, new_branch).await?;
         }
 
-        sqlx::query_as::<_, Worktree>(
+        let worktree = sqlx::query_as::<_, Worktree>(
             "INSERT INTO worktrees (id, project_id, ticket_id, name, branch) \
              VALUES ($1, $2, $3, $4, $5) \
              ON CONFLICT (project_id, ticket_id) \
@@ -232,13 +302,12 @@ impl WorktreeService {
         .bind(branch)
         .fetch_one(&self.pool)
         .await
-        .map_err(|source| {
-            DbError::Query {
-                context: "upsert worktree",
-                source,
-            }
-            .into()
-        })
+        .map_err(|source| DbError::Query {
+            context: "upsert worktree",
+            source,
+        })?;
+
+        Ok((worktree, fresh))
     }
 
     /// Load one worktree row by id, or a typed "missing" error.
@@ -294,6 +363,31 @@ impl WorktreeService {
                 }
                 .into()
             })
+    }
+
+    /// A project's repository path AND its setup script (both needed to provision a worktree),
+    /// fetched together so provision does one round-trip instead of two.
+    async fn project_path_and_script(
+        &self,
+        project_id: Uuid,
+    ) -> Result<(String, String), AppError> {
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT path, setup_script FROM projects WHERE id = $1",
+        )
+        .bind(project_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|source| DbError::Query {
+            context: "load project path and setup script",
+            source,
+        })?
+        .ok_or_else(|| {
+            DbError::NotFound {
+                entity: "project",
+                id: project_id.to_string(),
+            }
+            .into()
+        })
     }
 
     /// A project's display name (for error messages); falls back to the id if it's gone.

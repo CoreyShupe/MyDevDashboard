@@ -68,6 +68,17 @@ impl Emitter {
             Err(e) => self.error(&e),
         }
     }
+
+    /// Settle a spawned op whose in-flight guard was just cleared: ALWAYS reload a fresh snapshot
+    /// (so the just-cleared loading state disappears from the UI regardless of outcome) and, on
+    /// failure, ALSO surface the error modal. Used by the off-loop worktree provisions whose
+    /// loading row must clear on both the success and error paths.
+    pub async fn settle_reload(&self, backend: &Backend, result: Result<(), AppError>) {
+        if let Err(e) = &result {
+            self.error(e);
+        }
+        self.snapshot(backend).await;
+    }
 }
 
 /// The UI-side handle: a sender for intent and a receiver for results.

@@ -17,7 +17,7 @@ use crate::app::Bridge;
 use crate::app::projects::View as ProjectsView;
 use crate::app::tasks::View as TasksView;
 
-use project::NewProjectModal;
+use project::{NewProjectModal, SetupScriptModal};
 use worktree::NewWorktreeModal;
 
 // The ticket detail (tasks feature) delegates its worktree section here — creation is
@@ -31,6 +31,8 @@ pub struct ProjectsState {
     adding: Option<NewProjectModal>,
     /// The project whose detail page has taken over the workspace, if any.
     open_project: Option<Uuid>,
+    /// The open "edit setup script" modal (a project's per-worktree bash script), if any.
+    editing_setup_script: Option<SetupScriptModal>,
     /// A project pending a delete confirmation, if any.
     confirm_delete_project: Option<Uuid>,
     /// A worktree pending a remove confirmation, if any (destructive → confirmed first, §13).
@@ -69,6 +71,7 @@ impl ProjectsState {
         tasks: &TasksView,
     ) {
         self.render_add_project_modal(ctx, bridge);
+        self.render_setup_script_modal(ctx, bridge, projects);
         self.render_confirm_delete_modal(ctx, bridge, projects);
         self.render_remove_worktree_modal(ctx, bridge, projects);
         self.render_create_worktree_modal(ctx, bridge, projects, tasks);
@@ -88,6 +91,14 @@ impl ProjectsState {
             .is_some_and(|id| projects.project(id).is_none())
         {
             self.confirm_delete_project = None;
+        }
+        // Close the setup-script editor if its project vanished from the snapshot.
+        if self
+            .editing_setup_script
+            .as_ref()
+            .is_some_and(|m| projects.project(m.project_id()).is_none())
+        {
+            self.editing_setup_script = None;
         }
         // Drop a pending remove-confirmation if the worktree is gone or already a marker.
         if self
@@ -119,6 +130,12 @@ impl ProjectsState {
     /// Dev-only: open the "add project" modal, pre-filled, for review (see `ui::dev`).
     pub fn dev_open_add_project(&mut self) {
         self.adding = Some(NewProjectModal::dev_sample());
+    }
+
+    /// Dev-only: open a project's detail page with the setup-script editor open, for review.
+    pub fn dev_open_setup_script(&mut self, project_id: Uuid, current: &str) {
+        self.open_project = Some(project_id);
+        self.editing_setup_script = Some(SetupScriptModal::new(project_id, current));
     }
 }
 

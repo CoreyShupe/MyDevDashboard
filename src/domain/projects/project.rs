@@ -15,6 +15,9 @@ pub struct Project {
     pub name: String,
     /// Absolute path to the repository root on disk.
     pub path: String,
+    /// A bash script run inside each freshly-created worktree (e.g. `bun install`) so a new
+    /// worktree is ready to work in (AGENTS.md §10). Empty = no setup script.
+    pub setup_script: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

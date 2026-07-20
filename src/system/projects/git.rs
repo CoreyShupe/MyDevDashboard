@@ -6,9 +6,10 @@
 //! - **Status reads are best-effort.** [`status`] never errors: a non-repo, a missing remote,
 //!   or a `git fetch` that can't reach the network simply leaves fields empty/false. A single
 //!   broken project must never fail the whole snapshot.
-//! - **Explicit actions surface errors.** [`worktree_add`], [`worktree_remove`], and
-//!   [`open_in_vscode`] return a typed [`ProcessError`] the UI shows in a modal, because the
-//!   owner asked for the action and needs to know precisely why it didn't happen.
+//! - **Explicit actions surface errors.** [`worktree_add`], [`worktree_remove`],
+//!   [`run_setup_script`], and [`open_in_vscode`] return a typed [`ProcessError`] the UI shows in
+//!   a modal, because the owner asked for the action and needs to know precisely why it didn't
+//!   happen.
 //!
 //! Committing / pushing are deliberately NOT here — the owner runs those by hand so the exact
 //! commands are theirs to control (AGENTS.md §10). The ONE exception is a constrained
@@ -183,6 +184,33 @@ pub async fn worktree_remove(repo: &str, path: &Path) -> Result<(), ProcessError
         path.to_string_lossy().into_owned(),
     ];
     run(&args, "removing a worktree").await.map(|_| ())
+}
+
+/// Run a project's **setup script** as bash, with `dir` (the new worktree) as the working
+/// directory — the app's convenience for getting a fresh worktree ready (e.g. `bun install`).
+/// An explicit, owner-configured action, so a non-zero exit surfaces a typed [`ProcessError`]
+/// carrying the script's own stderr (unlike best-effort status reads). Callers only invoke this
+/// for a non-empty script; an empty one means "no setup" and never shells out (AGENTS.md §10).
+pub async fn run_setup_script(dir: &Path, script: &str) -> Result<(), ProcessError> {
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(script)
+        .current_dir(dir)
+        .output()
+        .await
+        .map_err(|source| ProcessError::Spawn {
+            program: "bash".to_owned(),
+            source,
+        })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(ProcessError::Exited {
+            program: "bash".to_owned(),
+            context: "running the project setup script",
+            stderr: stderr_of(&output.stderr),
+        })
+    }
 }
 
 /// Open a path in VS Code via the macOS launcher (robust even when the app was started from

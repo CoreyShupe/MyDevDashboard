@@ -12,6 +12,8 @@ pub enum Command {
     Create { name: String, path: String },
     /// Forget a project (its worktree rows cascade; the repo on disk is untouched).
     Delete { id: Uuid },
+    /// Set (or clear) a project's setup script — the bash run inside each new worktree (§10).
+    SetSetupScript { id: Uuid, script: String },
     /// Refetch live git status for the active profile's projects (AGENTS.md §10).
     RefreshStatus,
     /// `git pull --rebase origin <branch>` for one project on a shared branch, then refetch just
@@ -25,6 +27,9 @@ impl Command {
     }
     pub fn delete(id: Uuid) -> Self {
         Self::Delete { id }
+    }
+    pub fn set_setup_script(id: Uuid, script: String) -> Self {
+        Self::SetSetupScript { id, script }
     }
     pub fn refresh_status() -> Self {
         Self::RefreshStatus
@@ -61,6 +66,16 @@ pub async fn handle(backend: &Backend, emitter: &Emitter, cmd: Command) {
         Command::Delete { id } => {
             emitter
                 .settle(backend, backend.projects.project.delete(id).await)
+                .await;
+        }
+        // Persist the script; it only runs later, on worktree creation (§10). A plain settle:
+        // reload on success, surface a typed error on failure.
+        Command::SetSetupScript { id, script } => {
+            emitter
+                .settle(
+                    backend,
+                    backend.projects.project.set_setup_script(id, &script).await,
+                )
                 .await;
         }
         // Kick a background git refresh (never blocks the loop) and snapshot now so the tab shows

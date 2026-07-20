@@ -39,6 +39,9 @@ impl Event {
     pub fn delete_project(id: Uuid) -> Self {
         Self::Project(project::Command::delete(id))
     }
+    pub fn set_setup_script(id: Uuid, script: String) -> Self {
+        Self::Project(project::Command::set_setup_script(id, script))
+    }
     pub fn create_worktree(project_id: Uuid, ticket_id: Uuid, branch: String) -> Self {
         Self::Worktree(worktree::Command::create(project_id, ticket_id, branch))
     }
@@ -78,6 +81,10 @@ pub struct View {
     pub worktrees: Vec<Worktree>,
     /// Whether a git-status refresh is in flight — the tab shows a loading state while true.
     pub refreshing: bool,
+    /// `(project_id, ticket_id)` pairs whose worktree is being provisioned right now (git add +
+    /// setup script). The ticket/project detail shows a loading row for each until it lands, so a
+    /// worktree isn't presented as ready until its setup script has finished (AGENTS.md §10).
+    pub creating: Vec<(Uuid, Uuid)>,
 }
 
 impl View {
@@ -107,10 +114,12 @@ impl View {
             .collect();
 
         let worktrees = service.worktree.list_for_profile(profile_id).await?;
+        let creating = service.worktree.creating_ids().into_iter().collect();
         Ok(Self {
             projects,
             worktrees,
             refreshing: service.project.is_refreshing(),
+            creating,
         })
     }
 
@@ -138,6 +147,29 @@ impl View {
         self.worktrees_for_project(project_id)
             .filter(|w| w.is_live())
             .count()
+    }
+
+    /// Projects with a worktree being provisioned for `ticket_id` right now (drives the ticket
+    /// detail's loading rows).
+    pub fn creating_for_ticket(&self, ticket_id: Uuid) -> impl Iterator<Item = Uuid> + '_ {
+        self.creating
+            .iter()
+            .filter(move |(_, t)| *t == ticket_id)
+            .map(|(p, _)| *p)
+    }
+
+    /// Tickets with a worktree being provisioned in `project_id` right now (drives the project
+    /// detail's loading rows).
+    pub fn creating_for_project(&self, project_id: Uuid) -> impl Iterator<Item = Uuid> + '_ {
+        self.creating
+            .iter()
+            .filter(move |(p, _)| *p == project_id)
+            .map(|(_, t)| *t)
+    }
+
+    /// Whether a worktree for this exact `(project, ticket)` is being provisioned right now.
+    pub fn is_creating(&self, project_id: Uuid, ticket_id: Uuid) -> bool {
+        self.creating.contains(&(project_id, ticket_id))
     }
 }
 
@@ -180,6 +212,97 @@ pub fn spawn_pull(backend: &Backend, emitter: &Emitter, id: Uuid) {
         backend.projects.project.end_pull(id);
         emitter.settle(&backend, result).await;
     });
+}
+
+/// Kick off a non-blocking worktree **creation** for a ticket in a project (AGENTS.md §10).
+/// Provisioning shells out to git and then runs the project's setup script (e.g. `bun install`),
+/// which can be slow — so it must never block the worker's event loop or the UI. Claims the
+/// per-`(project, ticket)` "creating" guard first (a double-click is a no-op), then spawns the
+/// provision; the CALLER snapshots right after so the ticket detail shows the loading row at once.
+/// When it lands the guard is cleared and it settles.
+///
+/// A failing setup script is surfaced (error modal) but does NOT fail the worktree: it's created
+/// and tracked regardless, so the owner can fix the script and re-run in place (per owner intent).
+/// A git/DB provisioning failure, by contrast, means no worktree — that error is fatal.
+pub fn spawn_worktree_create(
+    backend: &Backend,
+    emitter: &Emitter,
+    project_id: Uuid,
+    ticket_id: Uuid,
+    branch: String,
+) {
+    if !backend
+        .projects
+        .worktree
+        .begin_create(project_id, ticket_id)
+    {
+        return; // already provisioning this worktree; its settle will carry the result
+    }
+    let backend = backend.clone();
+    let emitter = emitter.clone();
+    tokio::spawn(async move {
+        let result = provision_and_setup(
+            backend
+                .projects
+                .worktree
+                .create(project_id, ticket_id, &branch)
+                .await,
+            &backend,
+        )
+        .await;
+        backend.projects.worktree.end_create(project_id, ticket_id);
+        emitter.settle_reload(&backend, result).await;
+    });
+}
+
+/// Kick off a non-blocking worktree **recreation** from a removed marker (AGENTS.md §10). Since
+/// removal deleted the folder, recreating re-runs the project's setup script, so — like
+/// [`spawn_worktree_create`] — it's spawned off the loop with the same loading state (and the same
+/// "setup failure is non-fatal" behaviour). Its `(project, ticket)` is looked up from the row
+/// first (recreate starts from only a worktree id), then the loading snapshot is emitted from
+/// within the task. No-op if one is already in flight.
+pub fn spawn_worktree_recreate(backend: &Backend, emitter: &Emitter, id: Uuid) {
+    let backend = backend.clone();
+    let emitter = emitter.clone();
+    tokio::spawn(async move {
+        let (project_id, ticket_id) = match backend.projects.worktree.ids_of(id).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                emitter.error(&e);
+                return;
+            }
+        };
+        if !backend
+            .projects
+            .worktree
+            .begin_create(project_id, ticket_id)
+        {
+            return; // already provisioning this worktree
+        }
+        // Show the loading row now (the lookup was async, so we couldn't snapshot before spawning).
+        emitter.snapshot(&backend).await;
+        let result =
+            provision_and_setup(backend.projects.worktree.recreate(id).await, &backend).await;
+        backend.projects.worktree.end_create(project_id, ticket_id);
+        emitter.settle_reload(&backend, result).await;
+    });
+}
+
+/// Given a provision result `(worktree, fresh)`, run the project's setup script when the worktree
+/// was freshly created, and fold the outcome into a single `Result` for [`Emitter::settle_reload`]:
+/// - provisioning failed → its (fatal) error propagates (no worktree exists);
+/// - provisioned + setup failed → the SETUP error is returned, but the worktree is already created
+///   and tracked, so `settle_reload` shows the error yet the snapshot still includes the worktree;
+/// - provisioned + setup ok (or an adopted folder → no setup) → `Ok(())`.
+async fn provision_and_setup(
+    provision: Result<(Worktree, bool), AppError>,
+    backend: &Backend,
+) -> Result<(), AppError> {
+    match provision {
+        Ok((worktree, true)) => backend.projects.worktree.run_setup(&worktree).await,
+        Ok((_, false)) => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Refetch live git status for the active profile's projects into the service cache (AGENTS.md
