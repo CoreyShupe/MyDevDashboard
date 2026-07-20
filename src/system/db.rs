@@ -7,8 +7,8 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use crate::config::Config;
 use crate::error::DbError;
 
-/// Embedded migrations from `migrations/`, applied at startup.
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+/// Embedded migrations from `static/migrations/`, applied at startup.
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./static/migrations");
 
 /// Connect to PostgreSQL and run pending migrations.
 ///

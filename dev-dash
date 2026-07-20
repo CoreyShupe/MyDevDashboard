@@ -24,7 +24,7 @@
 #                               Encapsulates the whole build->launch->raise->capture->kill
 #                               flow so only this one script needs to be trusted.
 #     dev-dash snap [OUT]       Screenshot the ALREADY-RUNNING app to OUT (default
-#                               tmp/screenshots/live.png). Does NOT build, launch, or close it
+#                               static/tmp/screenshots/live.png). Does NOT build, launch, or close it
 #                               — use it to see the live app with the owner's real data.
 set -euo pipefail
 
@@ -46,6 +46,25 @@ usage() {
   exit "${1:-0}"
 }
 
+# Capture ONLY the app window to OUT — never the macOS menu bar (top) or dock (bottom), which
+# can leak other apps / notifications (opsec). `static/scripts/window-id.swift` looks up the app's
+# on-screen window id via CoreGraphics; we hand it to `screencapture -l` so only that window's
+# pixels are grabbed. `-o` drops the window's drop shadow for clean edges. This path needs only
+# Screen Recording permission (same as any screencapture) — NOT Accessibility — because a window
+# list + bounds are readable without it. Falls back to a full-screen grab (with a warning) if the
+# window can't be found, so a capture never silently produces nothing.
+capture_window() {
+  local out="$1"
+  local winid
+  winid=$(/usr/bin/swift "$SCRIPT_DIR/static/scripts/window-id.swift" 2>/dev/null || true)
+  if [[ "$winid" =~ ^[0-9]+$ ]]; then
+    screencapture -x -o -l"$winid" "$out"
+  else
+    echo "dev-dash: warning: couldn't find the app window; capturing full screen" >&2
+    screencapture -x "$out"
+  fi
+}
+
 cmd="${1:-open}"
 case "$cmd" in
   build)
@@ -58,10 +77,10 @@ case "$cmd" in
 
   db)
     case "${2:-}" in
-      up)    exec ./scripts/db-up.sh ;;
-      down)  exec ./scripts/db-down.sh ;;
-      reset) exec ./scripts/db-reset.sh ;;
-      psql)  exec ./scripts/db-psql.sh ;;
+      up)    exec ./static/scripts/db-up.sh ;;
+      down)  exec ./static/scripts/db-down.sh ;;
+      reset) exec ./static/scripts/db-reset.sh ;;
+      psql)  exec ./static/scripts/db-psql.sh ;;
       *)     echo "error: unknown 'db' subcommand '${2:-}'" >&2; usage 1 ;;
     esac
     ;;
@@ -70,7 +89,7 @@ case "$cmd" in
     # Isolated sandbox DB for verifying migrations (AGENTS.md §12) — fully separate from the
     # production `db` stack. Forwards the subcommand (up|down|reset|psql|migrate|url).
     shift
-    exec ./scripts/sandbox-db.sh "$@"
+    exec ./static/scripts/sandbox-db.sh "$@"
     ;;
 
   open)
@@ -129,7 +148,7 @@ case "$cmd" in
     perl -e 'select(undef,undef,undef,4)'
     osascript -e 'tell application "System Events" to set frontmost of (every process whose name contains "dev-dashboard") to true' 2>/dev/null || true
     perl -e 'select(undef,undef,undef,1.5)'
-    screencapture -x "$out"
+    capture_window "$out"
     pkill -f "$bin" 2>/dev/null || true
     echo "dev-dash: captured $view -> $out"
     exit 0
@@ -138,7 +157,7 @@ case "$cmd" in
   snap)
     # Screenshot the ALREADY-RUNNING app — no build, no launch, no kill. For "look at my app
     # and tell me what you see" against the owner's real, live data.
-    out="${2:-tmp/screenshots/live.png}"
+    out="${2:-static/tmp/screenshots/live.png}"
     bin_name=$(grep -m1 '^name' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
     if ! pgrep -f "$bin_name" >/dev/null 2>&1; then
       echo "error: the app isn't running. Launch it with 'dev-dash open' first." >&2
@@ -147,7 +166,7 @@ case "$cmd" in
     mkdir -p "$(dirname "$out")"
     osascript -e 'tell application "System Events" to set frontmost of (every process whose name contains "dev-dashboard") to true' 2>/dev/null || true
     perl -e 'select(undef,undef,undef,1)'
-    screencapture -x "$out"
+    capture_window "$out"
     echo "dev-dash: captured live app -> $out"
     exit 0
     ;;

@@ -5,7 +5,7 @@
 
 # Local scratch dir (review screenshots from `dev-dash shot`, etc). Contents ignored;
 # the screenshots/ subfolder is kept via its .gitkeep so the path always exists.
-/tmp/*
-!/tmp/screenshots
-/tmp/screenshots/*
-!/tmp/screenshots/.gitkeep
+/static/tmp/*
+!/static/tmp/screenshots
+/static/tmp/screenshots/*
+!/static/tmp/screenshots/.gitkeep

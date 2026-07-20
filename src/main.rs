@@ -48,7 +48,7 @@ fn main() -> eframe::Result<()> {
 
     // Headless migration check (AGENTS.md §12): connect to `DATABASE_URL`, apply migrations,
     // log the outcome, and EXIT — no window. Gated by `DEVDASH_MIGRATE_CHECK`, so a normal run
-    // is unaffected. `scripts/sandbox-db.sh migrate` uses this to verify migrations against the
+    // is unaffected. `static/scripts/sandbox-db.sh migrate` uses this to verify migrations against the
     // isolated sandbox DB (never production).
     if std::env::var_os("DEVDASH_MIGRATE_CHECK").is_some() {
         migrate_check(config);

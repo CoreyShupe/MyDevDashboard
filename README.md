@@ -6,13 +6,13 @@ so the state of your work lives somewhere other than your head. Built in Rust, b
 local PostgreSQL database. Your data never leaves your machine.
 
 <p align="center">
-  <img src="screenshots/tasks/board.png" alt="The Tasks board — a Jira-like board of stages and tickets" width="880">
+  <img src="static/screenshots/tasks/board.png" alt="The Tasks board — a Jira-like board of stages and tickets" width="880">
 </p>
 
 > This is deliberately a **personal, self-use** tool, not a team product — no accounts, no
 > sync, no cloud. It's tuned for one developer keeping their own work in order.
 
-There's a full [screenshot gallery](screenshots/) of most screens. Built with `egui`/`eframe`
+There's a full [screenshot gallery](static/screenshots/) of most screens. Built with `egui`/`eframe`
 (UI), `tokio` (workers), and `sqlx` + PostgreSQL (storage); see [AGENTS.md](AGENTS.md) for the
 architecture and the rules every contributor follows.
 
@@ -77,7 +77,7 @@ reference with all options and flags.
 On first launch you'll land on the onboarding screen to create your first **profile**, then drop
 into the dashboard with a left side-nav — **Tasks**, **Notes**, **Todos**, **Projects** — and an
 empty workspace. See [What it does](#what-it-does) above for a tour of each, or browse the full
-[screenshot gallery](screenshots/).
+[screenshot gallery](static/screenshots/).
 
 ## The database & persistence (important)
 
@@ -87,10 +87,10 @@ The dashboard stores everything in PostgreSQL running in Docker. Data is kept in
 ### Why your data survives `docker system prune`
 
 `docker system prune` (and even `prune --volumes`) only removes **anonymous / dangling**
-volumes. Because [`docker-compose.yml`](docker-compose.yml) declares the volume as
+volumes. Because [`docker-compose.yml`](static/docker/docker-compose.yml) declares the volume as
 `external: true` with a fixed `name`, it is:
 
-- created explicitly, once, by `./scripts/db-up.sh` (never auto-created anonymously), and
+- created explicitly, once, by `./static/scripts/db-up.sh` (never auto-created anonymously), and
 - never targeted by prune, because it is a named volume that is still referenced.
 
 So you can `docker compose down`, recreate the container, upgrade the image, or run a
@@ -125,7 +125,7 @@ code changes without leaving the app.
 
 Because this holds real data, migrations are verified against an **isolated sandbox** database —
 never your production one. The sandbox is a fully separate Docker stack
-([`docker-compose.sandbox.yml`](docker-compose.sandbox.yml) + [`.env.sandbox`](.env.sandbox)):
+([`docker-compose.sandbox.yml`](static/docker/docker-compose.sandbox.yml) + [`.env.sandbox`](.env.sandbox)):
 its own project/container/volume and **host port 5434** (production stays on 5433), so it can't
 collide with or touch your data.
 
@@ -168,8 +168,10 @@ other platforms even before you touch that call.
 - `dev-dash build`, `db …`, `sandbox …`, and `open` are portable shell + `cargo` + Docker — they
   work anywhere the prerequisites do.
 - `dev-dash shot` and `dev-dash snap` are **macOS-only**: they use `osascript` (raise the window),
-  `screencapture` (capture it), plus `pkill`/`perl` for process + timing control. A port would
-  swap these for the platform's equivalents (e.g. `wmctrl`/`xdotool` + `import`/`grim` on Linux).
+  a small `static/scripts/window-id.swift` CoreGraphics helper (find the app window's id) +
+  `screencapture -o -l` (capture just that window — never the menu bar or dock), plus `pkill`/`perl`
+  for process + timing control. A port would swap these for the platform's equivalents (e.g.
+  `wmctrl`/`xdotool` + `import`/`grim` on Linux).
 
 ## Troubleshooting
 

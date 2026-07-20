@@ -122,19 +122,19 @@ fn install_fonts(ctx: &egui::Context) {
     embed(
         &mut fonts,
         "nunito",
-        include_bytes!("../../assets/fonts/Nunito-SemiBold.ttf"),
+        include_bytes!("../../static/assets/fonts/Nunito-SemiBold.ttf"),
     );
     embed(
         &mut fonts,
         "nunito-bold",
-        include_bytes!("../../assets/fonts/Nunito-Bold.ttf"),
+        include_bytes!("../../static/assets/fonts/Nunito-Bold.ttf"),
     );
     // Material Icons — real, meaningful action icons (see the `icon` module). Codepoints
     // live in the Private Use Area, so this never shadows normal text glyphs.
     embed(
         &mut fonts,
         "material-icons",
-        include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf"),
+        include_bytes!("../../static/assets/fonts/MaterialIcons-Regular.ttf"),
     );
 
     // Proportional: Nunito SemiBold first; append Material Icons last so icon codepoints

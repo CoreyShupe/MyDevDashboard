@@ -27,7 +27,7 @@ DB/business logic lives behind a `*Service` in `system/`; `app/` is the only UI�
 editor launcher) is `system/projects/git.rs` (§10). Full tree + dispatch pattern in §2.
 
 **Where's the data?** In Postgres, reached only through `system/<feature>/`. Schema is in
-`migrations/NNNN_*.sql`. Everything is scoped to the **active profile** (§9).
+`static/migrations/NNNN_*.sql`. Everything is scoped to the **active profile** (§9).
 
 **Commands.** The `./dev-dash` wrapper and `cargo clippy` are pre-approved in
 `.claude/settings.json` and run without a prompt; a bare `cargo build`/`cargo run` is **not**
@@ -37,15 +37,15 @@ allowlisted (it will prompt) — use the wrapper.
 |-----|-----|
 | Compile-check while iterating | `cargo clippy` |
 | Build | `./dev-dash build`  ⟵ **not** `cargo build` |
-| Screenshot a mock screen | `./dev-dash shot VIEW tmp/screenshots/NAME.png` |
-| Screenshot the LIVE running app (owner's real data) | `./dev-dash snap [tmp/screenshots/live.png]` |
+| Screenshot a mock screen | `./dev-dash shot VIEW static/tmp/screenshots/NAME.png` |
+| Screenshot the LIVE running app (owner's real data) | `./dev-dash snap [static/tmp/screenshots/live.png]` |
 | Launch the app detached (in-app Restart rebuilds/relaunches) | `./dev-dash open [dev]` |
 | Database up / down / wipe+restart / shell | `./dev-dash db up` · `db down` · `db reset` · `db psql` |
 
 `VIEW` ∈ `onboarding · new-profile · profile-select · board · board-empty · ticket · page ·
 create · stage-edit · confirm-delete · notes · notes-empty · notes-file · todos · todos-empty ·
 projects · projects-empty · projects-loading · add-project · project · loading · error` (defined
-in `ui/dev.rs`; see §8). Every one has a committed screenshot under `screenshots/` (§11).
+in `ui/dev.rs`; see §8). Every one has a committed screenshot under `static/screenshots/` (§11).
 **Never edit `dev-dash` itself** (trust boundary, §6).
 
 **Before you're done:** `cargo fmt` → `cargo clippy` (clean) → `./dev-dash build` → **screenshot
@@ -190,7 +190,18 @@ src/
     │                       add-project / create-worktree modals.
     └── todos/              Todos tab: composer + open-todo rows (done checkbox + delete).
 ```
-(`assets/fonts/Nunito.ttf` — SIL OFL, embedded via `include_bytes!`. Not a crate.)
+(`static/assets/fonts/Nunito.ttf` — SIL OFL, embedded via `include_bytes!`. Not a crate.)
+
+### Top-level layout (non-`src/` files)
+Everything the app embeds or shells out to lives under **`static/`** so the repo root stays
+lean: `static/assets/` (embedded fonts), `static/migrations/` (embedded via `sqlx::migrate!`),
+`static/docker/` (both compose files), `static/scripts/` (the `db-*`/`sandbox-db` helpers +
+`window-id.swift`, the screenshot window-id helper — §8), `static/screenshots/` (the committed
+gallery, §11), and `static/tmp/` (gitignored scratch, §8).
+The `dev-dash` wrapper and the source `include_bytes!`/`sqlx::migrate!` paths point into `static/`;
+moving any of these means updating those references + `.claude/settings.json` in the same change.
+The project's Claude memory lives at **`.claude/CLAUDE.md`** (auto-loaded) and just imports this
+file via `@../AGENTS.md` — this file, at the repo root, remains the source of truth.
 
 ### The dispatch pattern: `root { feature { part { action } } }`
 This is THE pattern; use it for every new feature, part, and action. Each level's node is
@@ -267,7 +278,7 @@ mutates domain state locally except for transient input buffers (text fields).
 ```rust
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
-    #[error("cannot reach PostgreSQL at {target}. Is the database running? Try `./scripts/db-up.sh`")]
+    #[error("cannot reach PostgreSQL at {target}. Is the database running? Try `./static/scripts/db-up.sh`")]
     Connect { target: String, #[source] source: sqlx::Error },
     #[error("migration failed while applying `{migration}`: {source}")]
     Migrate { migration: String, #[source] source: sqlx::migrate::MigrateError },
@@ -311,7 +322,7 @@ variant for a distinct cause.
 - **Async:** `tokio` only inside `system/`/`app/`. No blocking calls on the UI thread.
 - **DB access:** only through a `*Service` in `system/`. Use `sqlx` **runtime** queries
   (`query`, `query_as`) — never the compile-time `query!` macros — so the project builds
-  without a live database. All schema changes go through a numbered file in `migrations/`.
+  without a live database. All schema changes go through a numbered file in `static/migrations/`.
 - **IDs & time:** `uuid::Uuid` (v4) for PKs; `chrono::DateTime<Utc>` for timestamps.
 - **Logging:** use `tracing` spans/events. Log every handled error at the boundary with
   enough context to fix it. Never log secrets or full connection strings with passwords.
@@ -343,14 +354,14 @@ variant for a distinct cause.
 
 - Local PostgreSQL runs via `docker compose` with a **named, persistent volume**
   (`my-dev-dash-pgdata`) so data survives `docker system prune`. The compose **project name is
-  pinned** (`name: my-dev-dash` in `docker-compose.yml`, mirrored by `COMPOSE_PROJECT_NAME` in
-  `scripts/_common.sh`) so a directory rename can't orphan the container. See `README.md` for setup.
-- Helper scripts in `scripts/` (`db-up`, `db-down`, `db-reset`, `db-psql`) wrap the common
+  pinned** (`name: my-dev-dash` in `static/docker/docker-compose.yml`, mirrored by `COMPOSE_PROJECT_NAME` in
+  `static/scripts/_common.sh`) so a directory rename can't orphan the container. See `README.md` for setup.
+- Helper scripts in `static/scripts/` (`db-up`, `db-down`, `db-reset`, `db-psql`) wrap the common
   operations; run them via the allowlisted wrapper — **`./dev-dash db {up,down,reset,psql}`** —
   not a bare `docker compose`. `db-up`/`db-down`/`db-reset` share `start_db`/`stop_db` helpers
   in `_common.sh`; **`db reset` = down → wipe volume → up** (leaves a fresh, running DB; the app
   migrates on next launch). Extend these rather than documenting manual `docker` steps.
-- Migrations live in `migrations/NNNN_name.sql`, applied automatically at app startup via
+- Migrations live in `static/migrations/NNNN_name.sql`, applied automatically at app startup via
   `sqlx::migrate!`. Never edit an already-applied migration; add a new one. Schema only —
   no seed rows (see the no-seeding rule above).
 - Connection config comes from `.env` (see `.env.example`). Never commit real secrets.
@@ -381,12 +392,18 @@ variant for a distinct cause.
 `./dev-dash` is the trusted, pre-approved entry point for building and for the whole
 build → launch → raise → capture → kill screenshot dance (it handles the macOS gotchas: the
 window opens behind others and needs Screen Recording + Accessibility permission; `sleep` is
-blocked so it uses `perl` timing). Prefer it over hand-rolling `screencapture`.
+blocked so it uses `perl` timing). Prefer it over hand-rolling `screencapture`. **Both `shot`
+and `snap` capture ONLY the app window — never the macOS menu bar (top) or dock (bottom), which
+can leak other apps/notifications (opsec).** They do this by resolving the app's window id via
+`static/scripts/window-id.swift` (a CoreGraphics window-list lookup — needs only Screen Recording,
+NOT Accessibility) and handing it to `screencapture -o -l`, so the drop shadow is dropped too and
+the frame is a clean window rectangle. If the window can't be found it warns and falls back to a
+full-screen grab, so a capture never silently produces nothing.
 
 ```bash
 ./dev-dash build                                  # compile (allowlisted; use instead of cargo build)
-./dev-dash shot VIEW tmp/screenshots/NAME.png     # capture one DEV_VIEW screen, then Read the PNG
-./dev-dash snap [tmp/screenshots/live.png]        # capture the ALREADY-RUNNING app (real data)
+./dev-dash shot VIEW static/tmp/screenshots/NAME.png     # capture one DEV_VIEW screen, then Read the PNG
+./dev-dash snap [static/tmp/screenshots/live.png]        # capture the ALREADY-RUNNING app (real data)
 ./dev-dash open [dev]                             # launch detached; loops on Restart (see below)
 ```
 
@@ -429,7 +446,7 @@ normal close) ends the loop. Keep the `86` in `dev-dash`'s `open` loop in sync w
   theme/component crate: they lag egui's version (e.g. `catppuccin-egui` capped at egui 0.30
   while we're on 0.35) and wouldn't match this look. We own the theme.
 - **Palette:** soft-dark, **teal** accent. One `Palette` (`theme::DARK`).
-- **Font:** Nunito (rounded, un-blocky), embedded from `assets/fonts/Nunito.ttf`.
+- **Font:** Nunito (rounded, un-blocky), embedded from `static/assets/fonts/Nunito.ttf`.
 - **Bubbly:** generous corner radii (`theme::radius`). Inputs are soft filled pills with a
   teal focus ring — never a harsh 1px box.
 - **No harsh blue:** selection/highlight uses `accent_soft` (teal), set in `theme.rs`.
@@ -455,14 +472,20 @@ This is a GUI app; verify UI changes by looking at them, not by guessing.
 > change touches and actually look at the image. The tooling is pre-approved (§6), so there's
 > no reason to skip it.
 
-**How:** `./dev-dash shot VIEW tmp/screenshots/NAME.png`, then Read the PNG (see §6 for the
-wrapper). Write shots into **`tmp/screenshots/`** (gitignored scratch, kept via `.gitkeep`) so
+**How:** `./dev-dash shot VIEW static/tmp/screenshots/NAME.png`, then Read the PNG (see §6 for the
+wrapper). Write shots into **`static/tmp/screenshots/`** (gitignored scratch, kept via `.gitkeep`) so
 you can open them in the IDE. Capture each affected `VIEW` (e.g. both `ticket` and `page` for a
 detail-view change).
 
+> **Clean up your scratch shots before you're done.** Any PNG you write into
+> `static/tmp/screenshots/` is throwaway verification scrap — delete the ones you created once
+> you've looked at them (leave `.gitkeep` and the owner's `live.png` alone). It's gitignored so
+> it won't be committed, but don't leave stale scratch lying around. This is separate from the
+> committed gallery under `static/screenshots/` (§11), which you DO keep up to date.
+
 > **"Look at my app" is a protocol.** When the owner says *look at my app / see what I'm
 > seeing / take a screenshot of what's open*, they mean the **already-running** instance with
-> their real data — screenshot it with `./dev-dash snap [OUT]` (default `tmp/screenshots/live.png`)
+> their real data — screenshot it with `./dev-dash snap [OUT]` (default `static/tmp/screenshots/live.png`)
 > and Read it. Unlike `shot`, `snap` does NOT build, launch, or close anything; it just raises
 > and captures the live window. (Errors if the app isn't running — tell them to `dev-dash open`.)
 
@@ -643,14 +666,14 @@ worktrees table lean — it takes common hard creates/deletes.
 
 ## 11. Screenshot gallery (keep it current)
 
-> **The gallery is a maintained artifact, not a scratch dump.** `screenshots/` is a committed,
+> **The gallery is a maintained artifact, not a scratch dump.** `static/screenshots/` is a committed,
 > browsable record of what every screen looks like — one folder per feature, one PNG per
 > `DEV_VIEW`. The owner reviews flows here. **A screen whose look changed with STALE pixels in
-> the gallery is a bug in your change.** (This is distinct from `tmp/screenshots/`, the
+> the gallery is a bug in your change.** (This is distinct from `static/tmp/screenshots/`, the
 > gitignored scratch you capture into while iterating, §8.)
 
-**Layout.** `screenshots/<feature>/<DEV_VIEW>.png` — the filename is exactly the `DEV_VIEW` key
-(§8), so the mapping is 1:1 and unambiguous. `screenshots/README.md` is the index (per-feature
+**Layout.** `static/screenshots/<feature>/<DEV_VIEW>.png` — the filename is exactly the `DEV_VIEW` key
+(§8), so the mapping is 1:1 and unambiguous. `static/screenshots/README.md` is the index (per-feature
 tables + inline thumbnails); regenerate/extend it alongside the images.
 
 | Folder | Screens (`DEV_VIEW`) |
@@ -673,8 +696,8 @@ tables + inline thumbnails); regenerate/extend it alongside the images.
    the screenshot is meant to show (the §8 "make it visible in the mock" rule).
 
 **When you touch UI, in the SAME change:**
-- **New screen/feature** → add the `DevView` + mock (§8), create `screenshots/<feature>/` if
-  new, capture the PNG(s), and add them to `screenshots/README.md`.
+- **New screen/feature** → add the `DevView` + mock (§8), create `static/screenshots/<feature>/` if
+  new, capture the PNG(s), and add them to `static/screenshots/README.md`.
 - **Changed look/layout/copy of an existing flow** → recapture every affected view's PNG (both
   presentations where relevant, e.g. `ticket` *and* `page`) so the gallery matches `main`.
 - **Recapture views whose visible BACKGROUND changed, not just the view you edited.** Many
@@ -690,8 +713,8 @@ tables + inline thumbnails); regenerate/extend it alongside the images.
 **Regenerate** (from the repo root; the wrapper is pre-approved, §6):
 
 ```bash
-./dev-dash shot <DEV_VIEW> screenshots/<feature>/<DEV_VIEW>.png
-# e.g. ./dev-dash shot projects screenshots/projects/projects.png
+./dev-dash shot <DEV_VIEW> static/screenshots/<feature>/<DEV_VIEW>.png
+# e.g. ./dev-dash shot projects static/screenshots/projects/projects.png
 ```
 
 Then **Read the PNG** to confirm it rendered what you intended (§8) before reporting done. The
@@ -720,16 +743,23 @@ a default (or nullable), a new index. When in doubt, ask.
 
 | | Production (the owner's data) | Sandbox (yours, for verification) |
 |---|---|---|
-| Compose | `docker-compose.yml` | `docker-compose.sandbox.yml` |
+| Compose | `static/docker/docker-compose.yml` | `static/docker/docker-compose.sandbox.yml` |
 | Env | `.env` (owner's, git-ignored) | `.env.sandbox` |
 | Project / container / volume | `my-dev-dash*` | `devdash-sandbox*` |
 | Host port | 5433 | **5434** |
 | Driven by | `dev-dash db …` (**DENIED** to agents) | `dev-dash sandbox …` |
 
+- **What binds the data is the volume + project name, NOT the file location.** The compose files
+  live under `static/docker/`; the `db-*` scripts reach them via the `compose()` helper in
+  `_common.sh` (which passes `-f static/docker/docker-compose.yml`), and `sandbox-db.sh` points at
+  `static/docker/docker-compose.sandbox.yml`. The production volume stays `external` + named
+  `my-dev-dash-pgdata` and the project name pinned `my-dev-dash` — those two facts, not the path,
+  keep the owner's data attached. **Never change the volume name, the `external: true` flag, or the
+  pinned project name**, and never point the scripts at a different compose file/volume — any of
+  those would orphan the owner's data. Moving the compose file itself is fine *as long as the
+  scripts' `-f` path and those invariants move with it in the same change* (as this layout did).
 - **Never touch the production stack.** Do not run `dev-dash db …`, do not `dev-dash open`
-  (both hit the real DB — they're denied in `.claude/settings.json`), and never rename/edit
-  `docker-compose.yml`, `scripts/_common.sh`, or `scripts/db-*.sh` (renaming would orphan the
-  owner's `my-dev-dash-pgdata` volume → data looks lost).
+  (both hit the real DB — they're denied in `.claude/settings.json`).
 - **Verify with `dev-dash sandbox migrate`.** It brings up the sandbox (5434), builds, and runs
   the app's real migration path headlessly via the `DEVDASH_MIGRATE_CHECK` gate in `main.rs`
   (connect → migrate → log → exit, no window). Confirm the log's `target` is `localhost:5434`.
@@ -739,7 +769,7 @@ a default (or nullable), a new index. When in doubt, ask.
 
 **Agent permissions** (`.claude/settings.json`) enforce this: only `dev-dash build|shot|snap|
 sandbox` and `cargo fmt|clippy` are allowed; `dev-dash db` and `dev-dash open` are denied. Drive
-the sandbox through `dev-dash sandbox`, not the raw `scripts/sandbox-db.sh`.
+the sandbox through `dev-dash sandbox`, not the raw `static/scripts/sandbox-db.sh`.
 
 ---
 

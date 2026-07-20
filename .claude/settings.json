@@ -15,8 +15,8 @@
     "ask": [
       "Edit(dev-dash)",
       "Write(dev-dash)",
-      "Edit(./scripts/*)",
-      "Write(./scripts/*)"
+      "Edit(./static/scripts/*)",
+      "Write(./static/scripts/*)"
     ]
   }
 }
