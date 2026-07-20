@@ -164,7 +164,7 @@ src/
 └── ui/                 PURE rendering. No DB. One folder per feature + the shell + kit.
     ├── mod.rs              `DashboardApp` (eframe): shell nav, workspace, error modal.
     ├── theme.rs            Design system: palette, fonts, visuals, radii, frames, grid (§7).
-    ├── components/         Shared component kit: input.rs, button.rs, card.rs (§7).
+    ├── components/         Shared component kit: input.rs, button.rs, card.rs, dnd.rs (§7).
     ├── dev.rs              Dev-only `DEV_VIEW` screen overrides for visual review (§8).
     ├── profile/            Onboarding "setup profile" screen + its transient UI state.
     ├── tasks/              mod.rs board + part renderers: stage.rs, ticket.rs, note.rs, modal.rs.
@@ -380,7 +380,7 @@ normal close) ends the loop. Keep the `86` in `dev-dash`'s `open` loop in sync w
 ## 7. Design system & UI components
 
 > **Design-system rule:** ALL visuals come from `ui/theme.rs` (palette, fonts, spacing,
-> corner radii, frames, grid) and `ui/components/` (input, button, card). Feature UI files
+> corner radii, frames, grid) and `ui/components/` (input, button, card, dnd). Feature UI files
 > MUST compose from these. NEVER hardcode a `Color32`, build a raw surface/input `Frame`,
 > or bespoke-style a button in a feature file. Need a color? add it to `Palette`. Need a
 > widget? add/extend a component.
@@ -388,6 +388,13 @@ normal close) ends the loop. Keep the `86` in `dev-dash`'s `open` loop in sync w
 > **Reuse-first components rule:** Add a NEW component only when no existing one can be
 > adapted by a small change. Prefer extending an existing one (e.g. `text_field` grew a
 > `text_field_sized` sibling rather than a new widget). One component per visual primitive.
+
+> **Drag-and-drop rule:** All drag-and-drop goes through `ui/components/dnd.rs` so it behaves
+> consistently. A dragged item lifts onto a floating layer and follows the pointer **from the
+> exact grab point** — never re-centre it on the cursor. Use `dnd::drag_ghost` in the
+> `is_being_dragged` branch (tickets and stage columns both do). Payload types are per-feature
+> and DISTINCT so drop targets can tell them apart (tickets use `Uuid`; stage reorder uses a
+> `StageDrag` newtype).
 
 ### Baked-in aesthetic decisions (do not fight these)
 - **Framework:** stay on `egui` — it themes fully. Do NOT add a UI framework or an egui
