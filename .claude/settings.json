@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(./dev-dash:*)"
+    ],
+    "ask": [
+      "Edit(dev-dash)",
+      "Write(dev-dash)"
+    ]
+  }
+}

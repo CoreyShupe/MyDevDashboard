@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+#
+# dev-dash — top-level CLI for the Mac Dev Dashboard.
+#
+# Symlink it into your system bin, e.g.:
+#     ln -s "$(pwd)/dev-dash" /usr/local/bin/dev-dash   # or ~/bin/dev-dash
+#
+# Commands:
+#     dev-dash build [release]  Compile (debug by default; `release` for optimized).
+#     dev-dash db up            Start the local PostgreSQL (persistent volume).
+#     dev-dash db down          Stop it (data preserved).
+#     dev-dash db reset         DESTROY the volume + all data (confirmation-gated).
+#     dev-dash db psql          Open a psql shell against the running DB.
+#     dev-dash open [dev]       Launch the app DETACHED and exit 0.
+#                               default = prod (release build, then run the binary);
+#                               `dev`   = `cargo run` (debug).
+#     dev-dash shot VIEW OUT    Screenshot a DEV_VIEW to OUT.png, then exit the app.
+#                               VIEW = onboarding|board|ticket|page|error (see ui::dev).
+#                               Encapsulates the whole build->launch->raise->capture->kill
+#                               flow so only this one script needs to be trusted.
+set -euo pipefail
+
+# Resolve this script's real directory, following symlinks so it works when symlinked
+# into a system bin. (Uses the requested `cd … dirname BASH_SOURCE … pwd` pattern, made
+# symlink-safe.)
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR=$( cd -- "$( dirname -- "$SOURCE" )" &> /dev/null && pwd )
+  SOURCE=$( readlink "$SOURCE" )
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR=$( cd -- "$( dirname -- "$SOURCE" )" &> /dev/null && pwd )
+cd "$SCRIPT_DIR"
+
+usage() {
+  # Print the command reference from this file's header comment.
+  sed -n '3,20p' "$SOURCE"
+  exit "${1:-0}"
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  build)
+    case "${2:-}" in
+      ""|debug) exec cargo build ;;
+      release)  exec cargo build --release ;;
+      *)        echo "error: unknown build mode '${2:-}' (use 'release' or omit)" >&2; usage 1 ;;
+    esac
+    ;;
+
+  db)
+    case "${2:-}" in
+      up)    exec ./scripts/db-up.sh ;;
+      down)  exec ./scripts/db-down.sh ;;
+      reset) exec ./scripts/db-reset.sh ;;
+      psql)  exec ./scripts/db-psql.sh ;;
+      *)     echo "error: unknown 'db' subcommand '${2:-}'" >&2; usage 1 ;;
+    esac
+    ;;
+
+  open)
+    mode="${2:-prod}"
+    case "$mode" in
+      dev)
+        echo "dev-dash: launching (dev, cargo run) …"
+        nohup cargo run >/dev/null 2>&1 &
+        ;;
+      prod)
+        echo "dev-dash: building release …"
+        cargo build --release
+        bin=$(grep -m1 '^name' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+        echo "dev-dash: launching (prod) …"
+        nohup "./target/release/$bin" >/dev/null 2>&1 &
+        ;;
+      *)
+        echo "error: unknown open mode '$mode' (use 'dev' or omit for prod)" >&2
+        usage 1
+        ;;
+    esac
+    disown || true
+    exit 0
+    ;;
+
+  shot)
+    view="${2:-}"
+    out="${3:-}"
+    if [[ -z "$view" || -z "$out" ]]; then
+      echo "error: usage: dev-dash shot VIEW OUT.png" >&2
+      usage 1
+    fi
+    cargo build
+    bin="$SCRIPT_DIR/target/debug/$(grep -m1 '^name' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+    pkill -f "$bin" 2>/dev/null || true
+    DEV_VIEW="$view" RUST_LOG=warn "$bin" >/dev/null 2>&1 &
+    # Wait for the window, raise it to the front, capture, then exit the app.
+    perl -e 'select(undef,undef,undef,4)'
+    osascript -e 'tell application "System Events" to set frontmost of (every process whose name contains "dev-dashboard") to true' 2>/dev/null || true
+    perl -e 'select(undef,undef,undef,1.5)'
+    screencapture -x "$out"
+    pkill -f "$bin" 2>/dev/null || true
+    echo "dev-dash: captured $view -> $out"
+    exit 0
+    ;;
+
+  ""|-h|--help|help)
+    usage 0
+    ;;
+
+  *)
+    echo "error: unknown command '$cmd'" >&2
+    usage 1
+    ;;
+esac

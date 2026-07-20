@@ -1,0 +1,43 @@
+[package]
+name = "my-dev-dashboard"
+version = "0.1.0"
+edition = "2024"
+description = "A self-use macOS developer dashboard"
+license = "MIT"
+
+[dependencies]
+# UI (approved: see AGENTS.md §1)
+eframe = "0.35"
+egui = "0.35"
+
+# Async runtime — workers/tasks only
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+# Database driver — runtime-checked queries, embedded migrations
+sqlx = { version = "0.9", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "uuid",
+    "chrono",
+    "macros",
+    "migrate",
+] }
+
+# Errors
+thiserror = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Utilities (approved)
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy = "0.15"
+
+[profile.dev]
+# Keep incremental builds snappy for a personal tool.
+opt-level = 1
