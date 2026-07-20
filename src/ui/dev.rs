@@ -18,6 +18,8 @@ use crate::error::UserFacingError;
 #[derive(Debug, Clone, Copy)]
 pub enum DevView {
     Onboarding,
+    /// The "new profile" create screen (opened from the switcher), over existing profiles.
+    NewProfile,
     Board,
     /// The ticket detail as a modal overlay.
     Ticket,
@@ -25,6 +27,8 @@ pub enum DevView {
     Page,
     /// The "new ticket" create modal, open over the board.
     Create,
+    /// The "edit stage" modal, open over the board.
+    StageEdit,
     /// The Notes tab, populated with uncategorized notes.
     Notes,
     /// The Notes tab with the "Add to ticket" search picker open.
@@ -37,10 +41,12 @@ impl DevView {
     pub fn from_env() -> Option<Self> {
         match std::env::var("DEV_VIEW").ok()?.trim() {
             "onboarding" => Some(Self::Onboarding),
+            "new-profile" => Some(Self::NewProfile),
             "board" => Some(Self::Board),
             "ticket" => Some(Self::Ticket),
             "page" => Some(Self::Page),
             "create" => Some(Self::Create),
+            "stage-edit" => Some(Self::StageEdit),
             "notes" => Some(Self::Notes),
             "notes-file" => Some(Self::NotesFile),
             "error" => Some(Self::Error),
@@ -52,23 +58,33 @@ impl DevView {
 /// A mock populated board (profile + three stages + a few tickets).
 pub fn mock_board() -> ViewData {
     let now = Utc::now();
-    let profile = profile::View {
-        profile: Some(Profile {
-            id: Uuid::new_v4(),
-            display_name: "Corey".to_owned(),
-            created_at: now,
-        }),
+    // Two profiles so the switcher has something to switch to; "Work" is active.
+    let work = Profile {
+        id: Uuid::new_v4(),
+        display_name: "Work".to_owned(),
+        created_at: now,
     };
-    let stage = |name: &str, position: i32| Stage {
+    let personal = Profile {
+        id: Uuid::new_v4(),
+        display_name: "Personal".to_owned(),
+        created_at: now,
+    };
+    let profile = profile::View {
+        profiles: vec![work.clone(), personal],
+        active: Some(work),
+    };
+    let stage = |name: &str, position: i32, terminal: bool| Stage {
         id: Uuid::new_v4(),
         name: name.to_owned(),
         position,
+        terminal,
         created_at: now,
     };
     let stages = vec![
-        stage("Pending", 0),
-        stage("In Progress", 1),
-        stage("Complete", 2),
+        stage("Pending", 0, false),
+        stage("In Progress", 1, false),
+        // Terminal end state: collapses to a count on the board (exercise the mechanism).
+        stage("Complete", 2, true),
     ];
 
     let ticket = |stage_id: Uuid, title: &str, description: &str, position: i32| Ticket {
@@ -105,6 +121,13 @@ pub fn mock_board() -> ViewData {
             "Scaffold project",
             "Feature-sliced architecture + docker postgres",
             0,
+        ),
+        // A second ticket in the terminal "Complete" stage so its count reads as "2 tickets".
+        ticket(
+            stages[2].id,
+            "Pick the color palette",
+            "Soft-dark + teal",
+            1,
         ),
     ];
     // Make "drag-and-drop" a child of "Wire up GitHub Actions" so DEV_VIEW shows relationships.

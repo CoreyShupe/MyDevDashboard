@@ -43,6 +43,12 @@ impl Event {
     pub fn delete_stage(id: Uuid) -> Self {
         Self::Stage(stage::Command::delete(id))
     }
+    pub fn set_terminal_stage(id: Uuid, terminal: bool) -> Self {
+        Self::Stage(stage::Command::set_terminal(id, terminal))
+    }
+    pub fn reorder_stages(ids: Vec<Uuid>) -> Self {
+        Self::Stage(stage::Command::reorder(ids))
+    }
     pub fn create_ticket(
         stage_id: Uuid,
         title: String,
@@ -94,16 +100,27 @@ pub struct View {
 }
 
 impl View {
-    pub async fn load(service: &TasksService) -> Result<Self, DbError> {
+    /// Load the board for one profile — its stages and their tickets (AGENTS.md §9).
+    pub async fn load(service: &TasksService, profile_id: Uuid) -> Result<Self, DbError> {
         Ok(Self {
-            stages: service.stage.list().await?,
-            tickets: service.ticket.list().await?,
+            stages: service.stage.list(profile_id).await?,
+            tickets: service.ticket.list(profile_id).await?,
         })
     }
 
     /// Tickets belonging to a given stage, in display order.
     pub fn tickets_for(&self, stage_id: Uuid) -> impl Iterator<Item = &Ticket> {
         self.tickets.iter().filter(move |t| t.stage_id == stage_id)
+    }
+
+    /// Look up a stage by id.
+    pub fn stage(&self, id: Uuid) -> Option<&Stage> {
+        self.stages.iter().find(|s| s.id == id)
+    }
+
+    /// Whether a stage is a terminal (end-state) column.
+    pub fn is_terminal(&self, stage_id: Uuid) -> bool {
+        self.stage(stage_id).is_some_and(|s| s.terminal)
     }
 
     /// Look up a ticket by id.

@@ -1,14 +1,19 @@
-# Local PostgreSQL for the Mac Dev Dashboard.
+# Local PostgreSQL for the Dev Dashboard.
 #
-# Data is stored in a NAMED external volume (`macdevdash_pgdata`) so it survives
+# Data is stored in a NAMED external volume (`my-dev-dash-pgdata`) so it survives
 # `docker compose down`, container recreation, and even `docker system prune`
 # (prune only removes *anonymous*/dangling volumes, never named ones referenced
 # here as `external: true`). Create it once with `./scripts/db-up.sh`.
 
+# Stable project name, independent of the checkout directory's name (which has changed over
+# time). Compose otherwise derives it from the directory basename; pinning it keeps the same
+# container/network across renames. The scripts export a matching COMPOSE_PROJECT_NAME.
+name: my-dev-dash
+
 services:
   postgres:
     image: postgres:18
-    container_name: macdevdash_postgres
+    container_name: my-dev-dash-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-devdash}
@@ -32,4 +37,4 @@ volumes:
   # `./scripts/db-up.sh` creates it explicitly the first time.
   pgdata:
     external: true
-    name: macdevdash_pgdata
+    name: my-dev-dash-pgdata

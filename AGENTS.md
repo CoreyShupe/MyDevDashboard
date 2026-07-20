@@ -1,9 +1,56 @@
 # AGENTS.md
 
 This file is the **binding contract** for every agent, chat, and human working in
-this repository. Read it fully before writing a line of code. Follow it religiously.
-If a rule is too generic to apply cleanly to your task, **stop and specify a more
-precise sub-rule here first**, then continue. Do not silently deviate.
+this repository. It is meant to be your **one-stop shop**: read it fully and you should not
+need to re-read the whole project to know its shape, where things live, or which commands to
+run. Follow it religiously. If a rule is too generic to apply cleanly to your task, **stop and
+specify a more precise sub-rule here first**, then continue. Do not silently deviate.
+
+> **Maintain this file — it is part of every change, not optional.** AGENTS.md only stays a
+> trustworthy one-stop shop if each change updates it in the SAME commit. Whenever you add or
+> change a crate, feature, part, table, migration, error variant, module, command, `DEV_VIEW`,
+> design token, or any rule/workflow, update the relevant section here (and `README.md` where
+> user-facing). If you discover something in this file is stale, wrong, or
+> made you run the wrong command / look in the wrong place, **fix it here first**, then proceed.
+> A change that leaves AGENTS.md out of date is incomplete. New agents: treat editing this file
+> as normal, expected work — future-you relies on it.
+
+---
+
+## Quick reference (skim this first, then §0–§9)
+
+**Shape.** Two axes (§2): horizontal layers `domain → system → app → ui`, crossed with vertical
+feature slices — `profile`, `tasks` (parts: `stage`, `ticket`, `note`), `notes`. The **same
+feature name appears in every layer**. All DB/business logic lives behind a `*Service` in
+`system/`; `app/` is the only UI↔system channel; `ui/` never touches the DB. Full tree +
+dispatch pattern in §2.
+
+**Where's the data?** In Postgres, reached only through `system/<feature>/`. Schema is in
+`migrations/NNNN_*.sql`. Everything is scoped to the **active profile** (§9).
+
+**Commands.** The `./dev-dash` wrapper and `cargo clippy` are pre-approved in
+`.claude/settings.json` and run without a prompt; a bare `cargo build`/`cargo run` is **not**
+allowlisted (it will prompt) — use the wrapper.
+
+| To… | Run |
+|-----|-----|
+| Compile-check while iterating | `cargo clippy` |
+| Build | `./dev-dash build`  ⟵ **not** `cargo build` |
+| Screenshot a mock screen | `./dev-dash shot VIEW tmp/screenshots/NAME.png` |
+| Screenshot the LIVE running app (owner's real data) | `./dev-dash snap [tmp/screenshots/live.png]` |
+| Launch the app detached (in-app Restart rebuilds/relaunches) | `./dev-dash open [dev]` |
+| Database up / down / wipe+restart / shell | `./dev-dash db up` · `db down` · `db reset` · `db psql` |
+
+`VIEW` ∈ `onboarding · new-profile · board · ticket · page · create · notes · notes-file ·
+error` (defined in `ui/dev.rs`; see §8). **Never edit `dev-dash` itself** (trust boundary, §6).
+
+**Before you're done:** `cargo fmt` → `cargo clippy` (clean) → `./dev-dash build` → **screenshot
+every screen you touched** (§8). No unit tests (§6). If you added a crate/feature/table/error
+variant/module, update **this file + `README.md`** in the same change (§6).
+
+**Never:** `.unwrap()`/`.expect()` in app code (§3) · seed data (§5) · let anything escape its
+profile (§9) · hardcode a color/frame outside `ui/theme.rs`+`ui/components/` (§7) · import
+`system/`/`sqlx` from `ui/` (§2).
 
 ---
 
@@ -11,10 +58,15 @@ precise sub-rule here first**, then continue. Do not silently deviate.
 
 A **single, self-use macOS developer dashboard** written in Rust. One place for the
 owner to manage their development work in a digestible way. It builds and runs as a
-**single application** (`cargo run`) backed by a local PostgreSQL database.
+**single application** backed by a local PostgreSQL database.
 
-The first feature is an onboarding "setup profile" flow, followed by a configurable,
-Jira-like **Tasks** board.
+Onboarding creates a **profile**. Profiles are self-contained workspaces the owner switches
+between (via the nav switcher) — everything belongs to exactly one and they never mix (§9).
+Inside the active profile: a configurable, Jira-like **Tasks** board (stages → tickets → notes;
+stages reorder by dragging their grip, and can be marked **terminal** in the edit-stage modal —
+an end state like "Complete"/"Cancelled" that collapses to a ticket count and is hidden from
+"Add to ticket") and a **Notes** tab for quick, uncategorized capture (which can later become a
+ticket or be filed onto one).
 
 ---
 
@@ -142,8 +194,9 @@ thin — it only names the level below and hands off; per-action logic lives at 
   worker → UI via `AppMessage` (snapshot / feature message / error) + a repaint nudge.
 - **Cross-feature reach is allowed.** A feature handler gets `&Backend` (all services) and
   may call another feature's service when a genuine cross-feature interaction calls for it.
-  Keep such reaches deliberate and commented. (There are none today — onboarding used to seed
-  the board, but seeding is now banned; see §5.)
+  Keep such reaches deliberate and commented. Examples today: `notes::FileIntoTicket` adds a
+  ticket note then deletes the uncategorized note; the `stage` and `notes` create handlers call
+  `app::profile::active_id(backend)` to scope new rows to the active profile (§9).
 - The UI thread MUST NEVER block on I/O. All DB/async work happens on the tokio worker.
 
 ### Data flow (one direction each way)
@@ -260,10 +313,15 @@ variant for a distinct cause.
 > stage"; each column has "+ New ticket"; the ticket modal has "Add note"). When you add a
 > part, add its empty-state creation affordance in the same change.
 
-- Local PostgreSQL runs via `docker compose` with a **named, persistent volume** so data
-  survives `docker system prune`. See `README.md` for full setup.
+- Local PostgreSQL runs via `docker compose` with a **named, persistent volume**
+  (`my-dev-dash-pgdata`) so data survives `docker system prune`. The compose **project name is
+  pinned** (`name: my-dev-dash` in `docker-compose.yml`, mirrored by `COMPOSE_PROJECT_NAME` in
+  `scripts/_common.sh`) so a directory rename can't orphan the container. See `README.md` for setup.
 - Helper scripts in `scripts/` (`db-up`, `db-down`, `db-reset`, `db-psql`) wrap the common
-  operations so setup is one command. Extend these rather than documenting manual steps.
+  operations; run them via the allowlisted wrapper — **`./dev-dash db {up,down,reset,psql}`** —
+  not a bare `docker compose`. `db-up`/`db-down`/`db-reset` share `start_db`/`stop_db` helpers
+  in `_common.sh`; **`db reset` = down → wipe volume → up** (leaves a fresh, running DB; the app
+  migrates on next launch). Extend these rather than documenting manual `docker` steps.
 - Migrations live in `migrations/NNNN_name.sql`, applied automatically at app startup via
   `sqlx::migrate!`. Never edit an already-applied migration; add a new one. Schema only —
   no seed rows (see the no-seeding rule above).
@@ -281,60 +339,41 @@ variant for a distinct cause.
 
 1. Before coding, confirm your change respects §2 (separation) and §3 (errors).
 2. If a rule doesn't fit, add a precise sub-rule to this file **before** proceeding.
-3. **`cargo clippy` is the primary check tool** — use it (not `cargo check`) to compile-
-   verify while iterating; it is pre-approved in `.claude/settings.json` so it runs without a
-   permission prompt. Run `cargo fmt` + `cargo clippy` + `cargo build` before considering work
-   done. No tests (above).
-4. When you add a crate, feature, table, error variant, or module, update this file and
-   the `README.md` in the same change.
+3. **Compile-check with `cargo clippy`** (not `cargo check`) while iterating — it's pre-approved
+   so it runs without a prompt. **Before done:** `cargo fmt` → `cargo clippy` (clean, no new
+   warnings) → `./dev-dash build`. Use `./dev-dash build`, **never a bare `cargo build`** (not
+   allowlisted → prompts; the wrapper is). No tests (above).
+4. **Update AGENTS.md + `README.md` in the same change** whenever you add/alter a crate,
+   feature, part, table, migration, error variant, module, command, `DEV_VIEW`, or design token.
+   This is the maintain-this-file rule at the top — treat it as part of "done".
 5. Prefer small, obvious code over cleverness. This is a personal tool — clarity wins.
 
-### Visual verification (screenshots on macOS)
+### The `dev-dash` wrapper (build + screenshots)
 
-Because this is a GUI, verify UI changes by looking at the running app, not just building.
-
-- **Force a specific screen without a DB** via the `DEV_VIEW` env var (see `ui/dev.rs`);
-  worker snapshots are ignored while it's set:
-  `DEV_VIEW={onboarding|board|ticket|page|create|notes|notes-file|error}` (`ticket` = detail
-  modal, `page` = the full-page detail, `create` = the new-ticket modal, `notes` = the Notes
-  tab, `notes-file` = the Notes tab with the "Add to ticket" picker open).
-- **Run the binary by ABSOLUTE path**, not `target/debug/…` relative — this shell's cwd
-  drifts (e.g. after a `cd` for a file move), and a wrong relative path makes the launch fail
-  silently, so you end up screenshotting whatever was already frontmost. If a capture shows
-  the wrong app, first check the binary actually started (`pgrep -fl my-dev-dashboard`).
-- The app window opens **behind** other windows, and `screencapture` grabs the frontmost
-  screen — so raise the app first (needs Screen Recording permission for the terminal/agent;
-  `set frontmost` also needs Accessibility permission — if it silently fails, that's why).
-- **Do not use `sleep`** (blocked in this harness) to wait for the window; use
-  `perl -e 'select(undef,undef,undef,SECONDS)'`.
+`./dev-dash` is the trusted, pre-approved entry point for building and for the whole
+build → launch → raise → capture → kill screenshot dance (it handles the macOS gotchas: the
+window opens behind others and needs Screen Recording + Accessibility permission; `sleep` is
+blocked so it uses `perl` timing). Prefer it over hand-rolling `screencapture`.
 
 ```bash
-BIN=/Users/cs/Programming/MacDevDashboard/target/debug/my-dev-dashboard  # absolute!
-cargo build            # cargo finds Cargo.toml from any subdir; the binary path is fixed
-
-# 1. launch the screen you want, detached
-DEV_VIEW=page RUST_LOG=warn "$BIN" >/dev/null 2>&1 &
-
-# 2. wait for the window, raise it, then capture
-perl -e 'select(undef,undef,undef,4)'
-osascript -e 'tell application "System Events" to set frontmost of (every process whose name contains "dev-dashboard") to true'
-perl -e 'select(undef,undef,undef,1.5)'
-screencapture -x /tmp/shot.png     # then open/read /tmp/shot.png
-
-# 3. IMMEDIATELY exit the app once captured — don't leave a window lingering.
-pkill -f "$BIN" 2>/dev/null || true
+./dev-dash build                                  # compile (allowlisted; use instead of cargo build)
+./dev-dash shot VIEW tmp/screenshots/NAME.png     # capture one DEV_VIEW screen, then Read the PNG
+./dev-dash snap [tmp/screenshots/live.png]        # capture the ALREADY-RUNNING app (real data)
+./dev-dash open [dev]                             # launch detached; loops on Restart (see below)
 ```
 
-(The process/window name is the Cargo package name, `my-dev-dashboard`.) `dev-dash open`
-launches detached the same way for manual use.
+The in-app **"Restart"** button (nav footer, under Refresh) exits with `RESTART_EXIT_CODE`
+(**86**, in `src/main.rs` — chosen clear of reserved bands: 0–2, sysexits 64–78, Rust panic 101,
+128+signal). `dev-dash open` runs the app in a loop that catches exactly that code and
+**rebuilds + relaunches** (prod) or **re-runs `cargo run`** (dev); any other exit (incl. a
+normal close) ends the loop. Keep the `86` in `dev-dash`'s `open` loop in sync with the constant.
 
 > **`dev-dash` is a trust boundary — do not edit it casually.** `.claude/settings.json`
 > allowlists `Bash(./dev-dash:*)` to run without prompting, and `dev-dash` internally runs
-> `osascript`/`screencapture`/`pkill`/`perl` (none of which are individually allowlisted).
-> Because running it is auto-approved, **editing it is deliberately gated**: the settings
-> `ask` rules force a confirmation prompt on `Edit(dev-dash)`/`Write(dev-dash)` even under
-> auto-accept. This is intentional — never remove that guard or widen the allowlist to the
-> underlying system tools to "simplify" things.
+> `osascript`/`screencapture`/`pkill`/`perl` (none individually allowlisted). Because running it
+> is auto-approved, **editing it is deliberately gated**: the settings `ask` rules force a
+> confirmation prompt on `Edit(dev-dash)`/`Write(dev-dash)` even under auto-accept. Never remove
+> that guard or widen the allowlist to the underlying system tools to "simplify" things.
 
 ---
 
@@ -377,84 +416,76 @@ doesn't exist, extend `theme`/`components` in the same change (and update this s
 
 This is a GUI app; verify UI changes by looking at them, not by guessing.
 
-> **Always verify UI changes with a screenshot before reporting them done.** This is a
-> standing expectation, not an optional extra — after any change that affects what a screen
-> looks like, capture the relevant `DEV_VIEW` and actually look at the image. The capture
-> tooling below is pre-approved (`Bash(./dev-dash:*)` in `.claude/settings.json`), so it runs
-> without a permission prompt — there is no reason to skip it.
+> **Always screenshot UI changes before reporting them done** — capture every screen your
+> change touches and actually look at the image. The tooling is pre-approved (§6), so there's
+> no reason to skip it.
 
-### The one-liner: `dev-dash shot VIEW OUT`
-`dev-dash shot` encapsulates the whole build → launch → raise → capture → kill flow, so this
-is the primary way to get a screenshot. It's the trusted wrapper (see the `dev-dash` trust-
-boundary note in §6) — prefer it over hand-rolling the `screencapture` dance.
+**How:** `./dev-dash shot VIEW tmp/screenshots/NAME.png`, then Read the PNG (see §6 for the
+wrapper). Write shots into **`tmp/screenshots/`** (gitignored scratch, kept via `.gitkeep`) so
+you can open them in the IDE. Capture each affected `VIEW` (e.g. both `ticket` and `page` for a
+detail-view change).
 
-```bash
-./dev-dash shot ticket tmp/screenshots/ticket.png   # VIEW = onboarding|board|ticket|page|create|notes|notes-file|error
-./dev-dash shot page   tmp/screenshots/page.png
-```
+> **"Look at my app" is a protocol.** When the owner says *look at my app / see what I'm
+> seeing / take a screenshot of what's open*, they mean the **already-running** instance with
+> their real data — screenshot it with `./dev-dash snap [OUT]` (default `tmp/screenshots/live.png`)
+> and Read it. Unlike `shot`, `snap` does NOT build, launch, or close anything; it just raises
+> and captures the live window. (Errors if the app isn't running — tell them to `dev-dash open`.)
 
-**Compile-verify with `./dev-dash build`, not a bare `cargo build`.** `./dev-dash build` is
-part of the same pre-approved wrapper (`Bash(./dev-dash:*)` in `.claude/settings.json`), so it
-runs without a permission prompt; `cargo build` is not allowlisted and will prompt. Use
-`cargo clippy` while iterating (it *is* allowlisted — see §6) and `./dev-dash build` for the
-build step.
+**`DEV_VIEW` screens** (in `ui/dev.rs`): the app injects mock in-memory state — no DB, no
+seeding — so a screen renders instantly and works with the DB down; while set, worker snapshots
+are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 
-Write shots into the in-project **`tmp/screenshots/`** folder (`tmp/` is the gitignored local
-scratch dir; the `screenshots/` subfolder is kept via `.gitkeep`, its contents ignored).
-Keeping them in-repo means you can open them in the IDE, not hunt through the system `/tmp`.
-Then Read the PNG to review it. Capture every view your change touches (e.g. both `ticket`
-and `page` for a detail-view change).
+| `VIEW` | Screen |
+|--------|--------|
+| `onboarding`  | First-run: create your first profile |
+| `new-profile` | "New profile" create screen (switcher top-left) over existing profiles |
+| `board`       | Populated Tasks board (profiles "Work"/"Personal") |
+| `ticket`      | Ticket detail modal |
+| `page`        | Ticket detail, full-page (expanded) |
+| `create`      | New-ticket create modal (with stage picker) |
+| `stage-edit`  | Edit-stage modal (name + terminal toggle + delete) |
+| `notes`       | Notes tab, populated |
+| `notes-file`  | Notes tab with the "Add to ticket" picker open |
+| `error`       | The error modal |
 
-> **Make the feature actually visible in the mock.** A screenshot only verifies what the
-> mock state exercises. If your change only shows up with certain data (e.g. the notes cap
-> needs >2 notes, an overflow needs a long string), enrich `ui/dev.rs` so the mock produces
-> it — e.g. `mock_notes()` returns 5 notes so the modal's 2-note cap and "N earlier notes"
-> line both render. An empty mock that hides the feature is a failed verification.
+**When you add a screen/feature, add a `DevView` variant + mock to `ui/dev.rs`** (and a row
+above) so it stays reviewable. Dev mocks are gated solely by the env var — never wire them into
+a normal run.
 
-### Jump straight to a screen — `DEV_VIEW`
-`ui/dev.rs` injects MOCK in-memory state (no DB, no data entry, no seeding) so any screen
-renders instantly. Set the env var when launching:
-
-```bash
-DEV_VIEW=board      cargo run   # populated Tasks board
-DEV_VIEW=onboarding cargo run   # setup-profile screen
-DEV_VIEW=ticket     cargo run   # board with a ticket modal open
-DEV_VIEW=create     cargo run   # board with the new-ticket create modal open
-DEV_VIEW=notes      cargo run   # the Notes tab, populated
-DEV_VIEW=notes-file cargo run   # the Notes tab with the "Add to ticket" picker open
-DEV_VIEW=error      cargo run   # the error modal
-```
-
-While a `DEV_VIEW` is active the app ignores worker snapshots, so the forced screen stays
-put and it works even with the database down. **When you add a new screen/feature, add a
-mock + `DevView` variant to `ui/dev.rs`** so it stays reviewable. Never wire dev mocks into
-a normal run — it's gated solely by the env var.
-
-### Capture the screen for review
-The app is a native window; capture it with macOS `screencapture` (requires Screen
-Recording permission for the controlling terminal). Bring the window to the front first:
-
-```bash
-# 1. Launch (background), e.g. straight to the board:
-DEV_VIEW=board RUST_LOG=warn cargo run   # run as a background task
-
-# 2. Bring the window to the front (its process name contains "dev-dashboard"):
-osascript -e 'tell application "System Events" to set frontmost of (first process whose name contains "dev-dashboard") to true'
-
-# 3. Capture to a file, then view it:
-screencapture -x /path/to/scratchpad/shot.png
-```
-
-Notes: `timeout` isn't on macOS — bound a foreground run with
-`perl -e 'alarm shift; exec @ARGV' 25 cargo run` if needed. Stop a background run when done.
+> **Make the feature actually visible in the mock.** A screenshot only verifies what the mock
+> exercises. If your change shows only with certain data (a long string to force wrapping, >N
+> items to trip a cap), enrich the mock so it renders — an empty mock that hides the feature is
+> a failed verification.
 
 ---
 
-_Last updated as part of: initial scaffold + onboarding/profile + Tasks board (feature-sliced,
-composed of parts; no seeding; no unit tests) + design system (theme + component kit) +
-ticket detail split (two-column page / capped modal notes) + handle-only card drag + new-ticket
-modal (now with a stage picker; title/description/first note, replacing the inline form) +
-Notes tab (uncategorized notes: quick capture, "Create Ticket" reusing the create modal, and
-"Add to ticket" search picker — a full feature slice + `uncategorized_notes` table); clippy as
-primary check; `./dev-dash build` for the build step; mandatory screenshot verification via
-`dev-dash shot`._
+## 9. Profiles are containers (everything belongs to one)
+
+> **Containment rule:** A **profile is a self-contained workspace.** Every user-created entity
+> — stages, tickets, ticket-notes, uncategorized notes, and anything added later — belongs to
+> exactly ONE profile, and profiles NEVER mix. Switching profiles swaps the entire workspace.
+> When you add any new kind of user data, it MUST be scoped to a profile in the same change.
+
+How it's enforced (keep new data consistent with this):
+
+- **Exactly one active profile.** `profiles.is_active` (partial unique index → at most one true)
+  marks it; `ProfileService::set_active` flips it atomically with
+  `UPDATE profiles SET is_active = (id = $1)`. `create()` makes the new profile active. `active()`
+  returns it (falling back to the oldest profile so a pre-multi-profile DB still resolves).
+- **Scoping columns.** Top-level tables carry `profile_id … REFERENCES profiles(id) ON DELETE
+  CASCADE` (`stages`, `uncategorized_notes`). Nested entities inherit their profile through their
+  parent rather than duplicating the column: **tickets** via their `stage` (list joins `stages`),
+  **ticket-notes** via their `ticket`. Deleting a profile cascades its whole workspace.
+- **Resolving the active profile.** Handlers that create profile-scoped rows call
+  `app::profile::active_id(&Backend) -> Result<Uuid, AppError>` (a `ProfileError::NoActive` if
+  none) so the UI never threads a profile id through events. `ViewData::load` scopes the board +
+  notes to `profile.active_id()`; a fresh snapshot after any change reloads the active profile's
+  data.
+- **UI.** The nav shows a **profile switcher** (`ui/profile::render_switcher`, `SwitcherStyle::Nav`)
+  — switch profiles or pick "New profile" (→ the new-profile onboarding flow). The onboarding
+  screen has two modes (`OnboardingMode::{FirstRun, NewProfile}`); **new-profile mode** shows a
+  top-left escape hatch — a **Back** link and a compact switcher — so you can leave without
+  creating one (Back and picking any profile, including the current one, both exit; the switcher
+  reports this via `SwitcherOutcome::selected_current`). **First-run has no escape** (no profile
+  to return to). The shell resets transient board/notes state when the active profile changes so
+  one profile's open modals don't bleed into another.

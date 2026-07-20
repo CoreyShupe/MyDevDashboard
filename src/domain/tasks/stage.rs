@@ -12,5 +12,8 @@ pub struct Stage {
     pub name: String,
     /// Left-to-right ordering on the board.
     pub position: i32,
+    /// A terminal stage is an end state (e.g. "Complete", "Cancelled"): on the board it
+    /// collapses to a ticket count, and its tickets are hidden from the "Add to ticket" picker.
+    pub terminal: bool,
     pub created_at: DateTime<Utc>,
 }

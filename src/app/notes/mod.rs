@@ -65,9 +65,10 @@ pub struct View {
 }
 
 impl View {
-    pub async fn load(service: &NotesService) -> Result<Self, DbError> {
+    /// Load the uncategorized notes for one profile (AGENTS.md §9).
+    pub async fn load(service: &NotesService, profile_id: Uuid) -> Result<Self, DbError> {
         Ok(Self {
-            notes: service.list().await?,
+            notes: service.list(profile_id).await?,
         })
     }
 }
@@ -76,7 +77,11 @@ impl View {
 /// list (and, for filing, the tasks board) reflects the change.
 pub async fn handle(backend: &Backend, emitter: &Emitter, event: Event) {
     let result = match event {
-        Event::Add { body } => backend.notes.add(&body).await.map(|_| ()),
+        // A captured note lands in the active profile (AGENTS.md §9).
+        Event::Add { body } => match crate::app::profile::active_id(backend).await {
+            Ok(profile_id) => backend.notes.add(profile_id, &body).await.map(|_| ()),
+            Err(e) => Err(e),
+        },
         Event::Delete { id } => backend.notes.delete(id).await,
         Event::FileIntoTicket {
             id,

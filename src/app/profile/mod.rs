@@ -1,62 +1,91 @@
 //! `profile` feature sub-root: its `Event`, `View`, and `handle()`.
+//!
+//! Profiles are the top-level containers (AGENTS.md §9). This sub-root also exposes
+//! [`active_id`], the shared way other features resolve "which profile am I acting in" — the
+//! stage/notes create handlers call it so the UI never has to thread a profile id through
+//! every event.
+
+use uuid::Uuid;
 
 use crate::domain::profile::Profile;
-use crate::error::DbError;
+use crate::error::{AppError, DbError, ProfileError};
 use crate::system::Backend;
 use crate::system::profile::ProfileService;
 
 use super::bridge::Emitter;
 use super::event::UiEvent;
 
-/// Intent for the profile / onboarding feature.
+/// Intent for the profile feature.
 #[derive(Debug, Clone)]
 pub enum Event {
+    /// Create a new profile (also becomes the active one).
     Create { display_name: String },
+    /// Switch which profile is active.
+    Switch { id: Uuid },
 }
 
 impl Event {
     pub fn create(display_name: String) -> Self {
         Self::Create { display_name }
     }
+    pub fn switch(id: Uuid) -> Self {
+        Self::Switch { id }
+    }
 }
 
-// Lets UI call `bridge.send(profile::Event::create(name))` without naming the root enum.
+// Lets UI call `bridge.send(profile::Event::switch(id))` without naming the root enum.
 impl From<Event> for UiEvent {
     fn from(event: Event) -> Self {
         UiEvent::Profile(event)
     }
 }
 
-/// The profile feature's slice of the rendered snapshot.
+/// The profile feature's slice of the rendered snapshot: every profile (for the switcher)
+/// plus which one is active (whose workspace is shown).
 #[derive(Debug, Clone, Default)]
 pub struct View {
-    pub profile: Option<Profile>,
+    pub profiles: Vec<Profile>,
+    pub active: Option<Profile>,
 }
 
 impl View {
     pub async fn load(service: &ProfileService) -> Result<Self, DbError> {
         Ok(Self {
-            profile: service.current().await?,
+            profiles: service.list().await?,
+            active: service.active().await?,
         })
     }
 
+    /// Onboarding is complete once at least one profile exists (so one is active).
     pub fn is_onboarded(&self) -> bool {
-        self.profile.is_some()
+        self.active.is_some()
+    }
+
+    /// The active profile's id, if any.
+    pub fn active_id(&self) -> Option<Uuid> {
+        self.active.as_ref().map(|p| p.id)
     }
 }
 
-/// Sub-root dispatch for the profile feature.
+/// Resolve the active profile's id, or a typed [`ProfileError::NoActive`]. The shared way for
+/// any feature handler to scope a create to the current profile (AGENTS.md §9).
+pub async fn active_id(backend: &Backend) -> Result<Uuid, AppError> {
+    backend
+        .profile
+        .active()
+        .await?
+        .map(|p| p.id)
+        .ok_or_else(|| ProfileError::NoActive.into())
+}
+
+/// Sub-root dispatch for the profile feature. Both actions settle to a fresh snapshot, which
+/// reloads the (now differently-scoped) tasks + notes for the active profile.
 pub async fn handle(backend: &Backend, emitter: &Emitter, event: Event) {
-    match event {
-        Event::Create { display_name } => create(backend, emitter, &display_name).await,
-    }
-}
-
-async fn create(backend: &Backend, emitter: &Emitter, display_name: &str) {
-    // No seeding (AGENTS.md §5): onboarding only writes the profile. The owner lands on an
-    // empty board and creates their own stages/tickets via the board's own creation flow.
-    match backend.profile.create(display_name).await {
-        Ok(_) => emitter.snapshot(backend).await,
-        Err(e) => emitter.error(&e),
-    }
+    let result = match event {
+        // No seeding (AGENTS.md §5): creating a profile writes only the profile (and makes it
+        // active). The owner lands on that profile's empty board and builds it up themselves.
+        Event::Create { display_name } => backend.profile.create(&display_name).await.map(|_| ()),
+        Event::Switch { id } => backend.profile.set_active(id).await,
+    };
+    emitter.settle(backend, result).await;
 }

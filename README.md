@@ -1,4 +1,4 @@
-# Mac Dev Dashboard
+# Dev Dashboard
 
 A self-use macOS developer dashboard, written in Rust. One place to manage your dev
 work in a digestible way — starting with a configurable, Jira-like **Tasks** board.
@@ -28,12 +28,18 @@ cp .env.example .env          # optional — db-up.sh does this for you if missi
 cargo run
 ```
 
-On first launch you'll land on the **Setup Profile** onboarding screen. Enter your name
-and you'll drop into the dashboard with a left side-nav (**Tasks**, **Notes**) and an empty
+On first launch you'll land on the onboarding screen to create your first **profile**. Then
+you'll drop into the dashboard with a left side-nav (**Tasks**, **Notes**) and an empty
 workspace.
 
+- **Profiles** — self-contained workspaces you switch between from the switcher at the top of
+  the nav. Each profile has its **own** stages, tickets, and notes — they never mix. "New
+  profile" (in the switcher) walks you through creating another and switches you into it.
 - **Tasks** — a configurable, Jira-like board of stages and tickets (with notes and
-  parent/child relationships).
+  parent/child relationships), scoped to the active profile. Drag a stage's grip to reorder
+  columns; edit a stage to mark it **terminal** (an end state like "Complete"/"Cancelled") —
+  terminal columns collapse to a ticket count with a "View tickets" toggle and are excluded
+  from the Notes "Add to ticket" picker.
 - **Notes** — a fast, list-like scratchpad for *uncategorized* notes. Jot a note at the top
   (Enter or **Add**), then file it later: **Create Ticket** turns a note into a new ticket
   (pre-filled as its first note), or **Add To Ticket** searches your tickets by title and
@@ -44,7 +50,7 @@ workspace.
 ## The database & persistence (important)
 
 The dashboard stores everything in PostgreSQL running in Docker. Data is kept in a
-**named external volume** called `macdevdash_pgdata`.
+**named external volume** called `my-dev-dash-pgdata`.
 
 ### Why your data survives `docker system prune`
 
@@ -61,15 +67,17 @@ deletes the data is the explicit, confirmation-gated `./scripts/db-reset.sh`.
 
 ### Helper scripts
 
-| Script                   | What it does |
-|--------------------------|--------------|
-| `./scripts/db-up.sh`     | Create the persistent volume (if needed) and start PostgreSQL; waits until healthy. |
-| `./scripts/db-down.sh`   | Stop the container. **Data is preserved.** |
-| `./scripts/db-psql.sh`   | Open an interactive `psql` shell against the running DB. |
-| `./scripts/db-reset.sh`  | **DESTRUCTIVE.** Delete the volume and all data (asks for confirmation). |
+| Script (or `dev-dash db …`)          | What it does |
+|--------------------------------------|--------------|
+| `db-up.sh`   (`dev-dash db up`)      | Create the persistent volume (if needed) and start PostgreSQL; waits until healthy. |
+| `db-down.sh` (`dev-dash db down`)    | Stop the container. **Data is preserved.** |
+| `db-psql.sh` (`dev-dash db psql`)    | Open an interactive `psql` shell against the running DB. |
+| `db-reset.sh`(`dev-dash db reset`)   | **DESTRUCTIVE.** Down → wipe the volume (all data) → up, leaving a fresh running DB (asks for confirmation). |
 
-All scripts load `.env` automatically and are idempotent where it makes sense. They are
-the intended, expandable CLI surface for managing the dev database — extend them rather
+Each script is also exposed through the `dev-dash db <cmd>` wrapper (handy since `dev-dash` is
+the one command agents run without a prompt). All load `.env` automatically and are idempotent
+where it makes sense. They are the intended, expandable CLI surface for managing the dev
+database — extend them rather
 than documenting manual `docker` commands.
 
 ### Configuration
@@ -117,7 +125,12 @@ cargo fmt          # format
 cargo clippy       # lint (keep it clean)
 cargo build        # builds WITHOUT a running database (runtime-checked queries)
 cargo run          # run the app (needs the DB up)
+./dev-dash open    # run detached; the in-app "Restart" button then rebuilds + relaunches
 ```
+
+The **Restart** button (nav footer, under Refresh) exits with a sentinel code that
+`./dev-dash open` catches to rebuild and relaunch (prod) or re-run (dev) — handy for picking up
+code changes without leaving the app.
 
 ## Troubleshooting
 

@@ -20,6 +20,9 @@ pub enum AppError {
 
     #[error(transparent)]
     Task(#[from] TaskError),
+
+    #[error(transparent)]
+    Profile(#[from] ProfileError),
 }
 
 /// Configuration / environment problems (loading `.env`, reading `DATABASE_URL`, …).
@@ -77,6 +80,14 @@ pub enum TaskError {
     StageNotEmpty { stage: String, count: i64 },
 }
 
+/// Profile-scoping violations. Every stage/ticket/note belongs to a profile (AGENTS.md §9),
+/// so an action that needs an active profile has none is a distinct, typed failure.
+#[derive(Debug, Error)]
+pub enum ProfileError {
+    #[error("no active profile — create or select a profile first")]
+    NoActive,
+}
+
 /// The user-aware view of an error, rendered by the UI modal.
 ///
 /// Carries a short `title`, a `detail` describing what happened, a concrete `remediation`
@@ -129,6 +140,12 @@ impl UserFacingError {
                 title: "Couldn't complete that".to_owned(),
                 detail: err.to_string(),
                 remediation: "Adjust the input and try again.".to_owned(),
+                retryable: false,
+            },
+            AppError::Profile(_) => Self {
+                title: "No active profile".to_owned(),
+                detail: err.to_string(),
+                remediation: "Create or select a profile, then try again.".to_owned(),
                 retryable: false,
             },
         }

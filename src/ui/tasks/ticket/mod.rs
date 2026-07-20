@@ -13,7 +13,7 @@ mod note;
 use crate::app::Bridge;
 use crate::app::tasks::Event;
 use crate::domain::tasks::Ticket;
-use crate::ui::components::card;
+use crate::ui::components::{card, dnd};
 use crate::ui::theme;
 
 use super::BoardState;
@@ -68,26 +68,15 @@ impl BoardState {
             handle_rect
         };
 
-        // While dragging, paint the WHOLE card onto a floating layer that follows the
-        // pointer, so the entire card appears to move even though only the handle started
-        // the drag. Payload = the ticket id, re-set each frame like `dnd_drag_source` does.
+        // While dragging, lift the WHOLE card onto a floating layer that follows the pointer
+        // from the grab point (shared `dnd::drag_ghost`), so the entire card appears to move
+        // even though only the handle started the drag. Payload = the ticket id, re-set each
+        // frame like `dnd_drag_source` does.
         if ui.ctx().is_being_dragged(drag_id) {
             egui::DragAndDrop::set_payload(ui.ctx(), ticket.id);
-
-            let layer_id = egui::LayerId::new(egui::Order::Tooltip, drag_id);
-            let response = ui
-                .scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
-                    render_body(ui);
-                })
-                .response;
-
-            if let Some(pointer_pos) = ui.ctx().pointer_interact_pos() {
-                let delta = pointer_pos - response.rect.center();
-                ui.ctx().transform_layer_shapes(
-                    layer_id,
-                    egui::emath::TSTransform::from_translation(delta),
-                );
-            }
+            dnd::drag_ghost(ui, drag_id, |ui| {
+                render_body(ui);
+            });
             return;
         }
 

@@ -1,4 +1,4 @@
-//! Mac Dev Dashboard — boot sequence.
+//! Dev Dashboard — boot sequence.
 //!
 //! Wires config -> tokio worker -> egui. Owns nothing but the startup handshake.
 //! See AGENTS.md for the architecture and rules.
@@ -19,6 +19,16 @@ use tracing_subscriber::EnvFilter;
 use app::{Bridge, repainter_from_ctx};
 use config::Config;
 use ui::DashboardApp;
+
+/// Process exit code the app returns when the owner clicks "Restart". `dev-dash open` watches
+/// for exactly this code and rebuilds+relaunches instead of staying down; any other exit code
+/// (incl. a normal window close = 0) ends the loop.
+///
+/// 86 is chosen to sit clear of every conventional band so it can't be confused with a real
+/// exit: not 0–2 (success / general error / shell misuse), not 64–78 (BSD `sysexits.h`), not
+/// 101 (Rust panic), not 128+N (killed by signal N). The "86 it" = eject/restart slang is the
+/// mnemonic. Keep this in sync with `restart_code` in `dev-dash`.
+pub const RESTART_EXIT_CODE: i32 = 86;
 
 fn main() -> eframe::Result<()> {
     init_tracing();

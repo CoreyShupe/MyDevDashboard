@@ -14,6 +14,8 @@ mod tasks;
 
 use std::rc::Rc;
 
+use uuid::Uuid;
+
 use crate::app::{AppMessage, Bridge, UiEvent, ViewData};
 use crate::error::UserFacingError;
 
@@ -40,6 +42,13 @@ pub struct DashboardApp {
     // Shell-level overlay.
     error: Option<UserFacingError>,
 
+    // True while the "New profile" flow is showing (from the switcher). Renders the onboarding
+    // create screen over the app until a profile is created or the user switches away.
+    new_profile_flow: bool,
+    // The active profile last rendered — used to reset transient board/notes state when the
+    // owner switches profiles (so one profile's open modals don't bleed into another).
+    active_profile_id: Option<Uuid>,
+
     // When a `DEV_VIEW` override is active, mock state is injected and worker snapshots are
     // ignored so the forced screen stays put (AGENTS.md §8).
     dev_mode: bool,
@@ -55,6 +64,8 @@ impl DashboardApp {
             board: tasks::BoardState::default(),
             notes: notes::NotesState::default(),
             error: None,
+            new_profile_flow: false,
+            active_profile_id: None,
             dev_mode: false,
         };
         app.apply_dev_overrides();
@@ -68,7 +79,11 @@ impl DashboardApp {
         };
         self.dev_mode = true;
         match view {
-            dev::DevView::Onboarding => {} // default state already shows onboarding
+            dev::DevView::Onboarding => {} // default state (no profiles) shows first-run onboarding
+            dev::DevView::NewProfile => {
+                self.data = Rc::new(dev::mock_board()); // existing profiles to switch back to
+                self.new_profile_flow = true;
+            }
             dev::DevView::Board => self.data = Rc::new(dev::mock_board()),
             dev::DevView::Ticket => self.dev_open_ticket(false),
             dev::DevView::Page => self.dev_open_ticket(true),
@@ -76,6 +91,14 @@ impl DashboardApp {
                 let data = dev::mock_board();
                 if let Some(stage) = data.tasks.stages.first() {
                     self.board.dev_open_new_ticket(stage.id);
+                }
+                self.data = Rc::new(data);
+            }
+            dev::DevView::StageEdit => {
+                let data = dev::mock_board();
+                // Open the edit modal on the terminal "Complete" stage so the toggle shows on.
+                if let Some(stage) = data.tasks.stages.iter().find(|s| s.terminal) {
+                    self.board.dev_open_stage_edit(stage);
                 }
                 self.data = Rc::new(data);
             }
@@ -124,6 +147,14 @@ impl DashboardApp {
             match msg {
                 AppMessage::Snapshot(data) => {
                     let data = Rc::new(data);
+                    // Switching profiles swaps the whole workspace — drop transient board/notes
+                    // state so one profile's open modals/buffers don't carry into another.
+                    let active = data.profile.active_id();
+                    if active != self.active_profile_id {
+                        self.board = tasks::BoardState::default();
+                        self.notes = notes::NotesState::default();
+                        self.active_profile_id = active;
+                    }
                     // Let the board close a modal whose ticket vanished, etc.
                     self.board.reconcile(&data.tasks);
                     self.data = data;
@@ -151,22 +182,33 @@ impl DashboardApp {
             )
             .show(ui, |ui| {
                 ui.add_space(6.0);
-                let name = data
-                    .profile
-                    .profile
-                    .as_ref()
-                    .map(|p| p.display_name.as_str())
-                    .unwrap_or("Dashboard");
-                ui.heading(name);
+                // Profile switcher (replaces the old static name heading): switch profiles or
+                // start a new one. Everything below is scoped to the active profile (§9).
+                if profile::render_switcher(
+                    ui,
+                    &self.bridge,
+                    &data.profile,
+                    profile::SwitcherStyle::Nav,
+                )
+                .new_profile
+                {
+                    self.new_profile_flow = true;
+                }
                 ui.add_space(18.0);
 
                 // Nav tabs. Add a tab per feature as they land.
                 self.nav_item(ui, Tab::Tasks, &format!("{} Tasks", theme::icon::DASHBOARD));
                 self.nav_item(ui, Tab::Notes, &format!("{} Notes", theme::icon::NOTES));
 
-                // Footer: manual refresh (re-pulls state from the database).
+                // Footer: manual refresh (re-pulls state from the DB) + restart. In a
+                // bottom-up layout the first item added sits lowest, so Restart lands UNDER
+                // Refresh. Restart exits with `RESTART_EXIT_CODE`, which `dev-dash open`
+                // catches to rebuild + relaunch (a plain run just exits).
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     ui.add_space(12.0);
+                    if button::ghost(ui, &format!("{} Restart", theme::icon::RESTART)).clicked() {
+                        std::process::exit(crate::RESTART_EXIT_CODE);
+                    }
                     if button::ghost(ui, &format!("{} Refresh", theme::icon::REFRESH)).clicked() {
                         self.bridge.send(UiEvent::ReloadAll);
                     }
@@ -290,17 +332,39 @@ impl eframe::App for DashboardApp {
         // Infinite grid backdrop, painted under every panel (panels below are transparent).
         theme::paint_background(&ctx);
 
-        if data.has_profile() {
-            self.render_shell(ui, &data);
+        // Three top-level screens: first-run onboarding (no profiles), the "new profile" create
+        // screen (opened from the switcher), or the dashboard for the active profile.
+        if !data.has_profile() {
+            self.onboarding.render(
+                &self.bridge,
+                ui,
+                profile::OnboardingMode::FirstRun,
+                &data.profile,
+            );
+        } else if self.new_profile_flow {
+            let leave = self.onboarding.render(
+                &self.bridge,
+                ui,
+                profile::OnboardingMode::NewProfile,
+                &data.profile,
+            );
+            if leave {
+                self.new_profile_flow = false;
+            }
         } else {
-            self.onboarding.render(&self.bridge, ui);
+            self.render_shell(ui, &data);
         }
 
-        // Overlays render last so they sit on top of whatever is behind them.
-        self.board.render_overlays(&ctx, &self.bridge, &data.tasks);
-        self.board
-            .render_create_modal(&ctx, &self.bridge, &data.tasks);
-        self.notes.render_overlays(&ctx, &self.bridge, &data.tasks);
+        // Overlays render last so they sit on top of whatever is behind them. Suppressed while a
+        // full-screen onboarding flow is up (no board/notes behind them to act on).
+        if data.has_profile() && !self.new_profile_flow {
+            self.board.render_overlays(&ctx, &self.bridge, &data.tasks);
+            self.board
+                .render_create_modal(&ctx, &self.bridge, &data.tasks);
+            self.board
+                .render_stage_modal(&ctx, &self.bridge, &data.tasks);
+            self.notes.render_overlays(&ctx, &self.bridge, &data.tasks);
+        }
         self.render_error_modal(&ctx);
     }
 }

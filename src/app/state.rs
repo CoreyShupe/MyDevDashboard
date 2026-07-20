@@ -20,11 +20,12 @@ impl ViewData {
     /// Build a full snapshot by asking each feature to load its slice.
     pub async fn load(backend: &Backend) -> Result<Self, AppError> {
         let profile = profile::View::load(&backend.profile).await?;
-        // Only load the board + notes once onboarding is done; keeps first-run cheap.
-        let (tasks, notes) = if profile.is_onboarded() {
+        // Everything is scoped to the active profile (AGENTS.md §9). Load the board + notes for
+        // it; on first run (no active profile) there's nothing to load.
+        let (tasks, notes) = if let Some(profile_id) = profile.active_id() {
             (
-                tasks::View::load(&backend.tasks).await?,
-                notes::View::load(&backend.notes).await?,
+                tasks::View::load(&backend.tasks, profile_id).await?,
+                notes::View::load(&backend.notes, profile_id).await?,
             )
         } else {
             (tasks::View::default(), notes::View::default())

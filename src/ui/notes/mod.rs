@@ -130,22 +130,25 @@ impl NotesState {
 
         card::card(ui, |ui| {
             ui.set_width(ui.available_width());
-            // Rows are intentionally taller than the composer so there's room to write and
-            // for both action buttons to sit comfortably on the right.
-            const ROW_MIN_H: f32 = 76.0;
-            const ACTIONS_W: f32 = 150.0;
+            // Rows are intentionally taller than the composer so there's room to write, with
+            // both actions sitting side by side on the right.
+            const ROW_MIN_H: f32 = 72.0;
+            const ACTIONS_W: f32 = 290.0; // fits "Create Ticket" + "Add To Ticket" side by side
             const GAP: f32 = 14.0;
 
             ui.horizontal_top(|ui| {
-                let text_w = (ui.available_width() - ACTIONS_W - GAP).max(140.0);
+                // Zero the row's horizontal item-spacing so the columns sum to EXACTLY the card
+                // width (text + GAP + actions). egui's default 8px between them would make each
+                // row overflow its card, and that overflow compounds down the list.
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let text_w = (ui.available_width() - ACTIONS_W - GAP).max(160.0);
 
-                // Left: the note body (wrapped) + a subtle timestamp.
+                // Left: the note body (wrapped) + a subtle timestamp. `set_min_width` keeps the
+                // column full-width even for short notes, so the actions stay pinned right.
                 ui.allocate_ui_with_layout(
                     egui::vec2(text_w, ROW_MIN_H),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        // Fill the whole text column even when the note is short, so the
-                        // action buttons stay pinned to the card's right edge on every row.
                         ui.set_min_width(text_w);
                         ui.add(egui::Label::new(egui::RichText::new(&note.body).size(15.0)).wrap());
                         ui.add_space(6.0);
@@ -161,16 +164,18 @@ impl NotesState {
 
                 ui.add_space(GAP);
 
-                // Right: stacked, full-width action buttons.
+                // Right: the two actions side by side, hugging the card's right edge
+                // (right-to-left, so the first added button is the rightmost).
                 ui.allocate_ui_with_layout(
                     egui::vec2(ACTIONS_W, ROW_MIN_H),
-                    egui::Layout::top_down_justified(egui::Align::Min),
+                    egui::Layout::right_to_left(egui::Align::Min),
                     |ui| {
-                        if button::secondary(ui, "Create Ticket").clicked() {
-                            outcome.create_ticket_from = Some((note.id, note.body.clone()));
-                        }
+                        ui.spacing_mut().item_spacing.x = 8.0; // gap between the two buttons
                         if button::secondary(ui, "Add To Ticket").clicked() {
                             self.add_to_ticket = Some(AddToTicketModal::new(note));
+                        }
+                        if button::secondary(ui, "Create Ticket").clicked() {
+                            outcome.create_ticket_from = Some((note.id, note.body.clone()));
                         }
                     },
                 );
@@ -223,6 +228,11 @@ impl NotesState {
                     .show(ui, |ui| {
                         let mut any = false;
                         for ticket in &tasks.tickets {
+                            // Terminal-stage tickets (Complete/Cancelled) are end states — never
+                            // offer them as a target, even while their stage is "viewed".
+                            if tasks.is_terminal(ticket.stage_id) {
+                                continue;
+                            }
                             if !query.is_empty() && !ticket.title.to_lowercase().contains(&query) {
                                 continue;
                             }

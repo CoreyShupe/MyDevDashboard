@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# DESTRUCTIVE: stop the DB and DELETE the persistent volume, wiping all data.
-# Use only when you want a clean slate. Requires explicit confirmation.
+# DESTRUCTIVE: down → wipe the persistent volume → up. Leaves a FRESH, running database (the
+# app applies migrations on its next launch). Requires explicit confirmation.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
@@ -13,6 +13,11 @@ if [[ "$reply" != "reset" ]]; then
   exit 0
 fi
 
-docker compose down
+# down → wipe → up, reusing the shared helpers so this stays in step with db-down / db-up.
+echo "stopping the database..."
+stop_db
+echo "deleting volume '$VOLUME_NAME'..."
 docker volume rm "$VOLUME_NAME" >/dev/null 2>&1 || true
-echo "volume removed. Run ./scripts/db-up.sh to start fresh."
+echo "starting a fresh database..."
+start_db
+echo "done. Fresh database is up; the app applies migrations on its next launch."

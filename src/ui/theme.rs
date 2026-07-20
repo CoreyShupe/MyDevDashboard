@@ -63,6 +63,8 @@ pub mod icon {
     pub const DELETE: char = '\u{e872}'; // delete
     pub const EDIT: char = '\u{e3c9}'; // edit
     pub const REFRESH: char = '\u{e5d5}'; // refresh
+    pub const RESTART: char = '\u{e042}'; // restart_alt (rebuild + relaunch)
+    pub const FLAG: char = '\u{e153}'; // flag (terminal-stage marker)
     pub const CLOSE: char = '\u{e5cd}'; // close
     pub const DASHBOARD: char = '\u{e871}'; // dashboard (nav: Tasks)
     pub const NOTES: char = '\u{e873}'; // description (nav: Notes)

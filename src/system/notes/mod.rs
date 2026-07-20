@@ -20,11 +20,13 @@ impl NotesService {
         Self { pool }
     }
 
-    /// All uncategorized notes, newest first (most-recent capture on top).
-    pub async fn list(&self) -> Result<Vec<Note>, DbError> {
+    /// All uncategorized notes in a profile, newest first (most-recent capture on top).
+    pub async fn list(&self, profile_id: Uuid) -> Result<Vec<Note>, DbError> {
         sqlx::query_as::<_, Note>(
-            "SELECT id, body, created_at FROM uncategorized_notes ORDER BY created_at DESC",
+            "SELECT id, body, created_at FROM uncategorized_notes \
+             WHERE profile_id = $1 ORDER BY created_at DESC",
         )
+        .bind(profile_id)
         .fetch_all(&self.pool)
         .await
         .map_err(|source| DbError::Query {
@@ -33,18 +35,19 @@ impl NotesService {
         })
     }
 
-    /// Capture a new note. Body is required.
-    pub async fn add(&self, body: &str) -> Result<Note, AppError> {
+    /// Capture a new note in a profile. Body is required.
+    pub async fn add(&self, profile_id: Uuid, body: &str) -> Result<Note, AppError> {
         let body = body.trim();
         if body.is_empty() {
             return Err(TaskError::Empty { field: "note" }.into());
         }
 
         let note = sqlx::query_as::<_, Note>(
-            "INSERT INTO uncategorized_notes (id, body) VALUES ($1, $2) \
+            "INSERT INTO uncategorized_notes (id, profile_id, body) VALUES ($1, $2, $3) \
              RETURNING id, body, created_at",
         )
         .bind(Uuid::new_v4())
+        .bind(profile_id)
         .bind(body)
         .fetch_one(&self.pool)
         .await

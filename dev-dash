@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# dev-dash — top-level CLI for the Mac Dev Dashboard.
+# dev-dash — top-level CLI for the Dev Dashboard.
 #
 # Symlink it into your system bin, e.g.:
 #     ln -s "$(pwd)/dev-dash" /usr/local/bin/dev-dash   # or ~/bin/dev-dash
@@ -14,10 +14,16 @@
 #     dev-dash open [dev]       Launch the app DETACHED and exit 0.
 #                               default = prod (release build, then run the binary);
 #                               `dev`   = `cargo run` (debug).
+#                               In-app "Restart" (exit 86) is caught here: prod rebuilds +
+#                               relaunches; dev re-runs `cargo run`.
 #     dev-dash shot VIEW OUT    Screenshot a DEV_VIEW to OUT.png, then exit the app.
-#                               VIEW = onboarding|board|ticket|page|error (see ui::dev).
+#                               VIEW = onboarding|new-profile|board|ticket|page|create|
+#                                      notes|notes-file|error (see ui::dev).
 #                               Encapsulates the whole build->launch->raise->capture->kill
 #                               flow so only this one script needs to be trusted.
+#     dev-dash snap [OUT]       Screenshot the ALREADY-RUNNING app to OUT (default
+#                               tmp/screenshots/live.png). Does NOT build, launch, or close it
+#                               — use it to see the live app with the owner's real data.
 set -euo pipefail
 
 # Resolve this script's real directory, following symlinks so it works when symlinked
@@ -34,11 +40,11 @@ cd "$SCRIPT_DIR"
 
 usage() {
   # Print the command reference from this file's header comment.
-  sed -n '3,20p' "$SOURCE"
+  sed -n '3,26p' "$SOURCE"
   exit "${1:-0}"
 }
 
-cmd="${1:-}"
+cmd="${1:-open}"
 case "$cmd" in
   build)
     case "${2:-}" in
@@ -60,17 +66,35 @@ case "$cmd" in
 
   open)
     mode="${2:-prod}"
+    # The in-app "Restart" button exits with this code; the detached loops below catch it and
+    # relaunch instead of stopping. MUST match RESTART_EXIT_CODE in src/main.rs.
+    restart_code=86
     case "$mode" in
       dev)
-        echo "dev-dash: launching (dev, cargo run) …"
-        nohup cargo run >/dev/null 2>&1 &
+        echo "dev-dash: launching (dev, cargo run; Restart re-runs) …"
+        # Loop: re-run on the restart code, stop on any other exit (incl. a normal close).
+        nohup bash -c '
+          restart=$1
+          while true; do
+            cargo run
+            [ $? -eq "$restart" ] || break
+          done
+        ' _ "$restart_code" >/dev/null 2>&1 &
         ;;
       prod)
         echo "dev-dash: building release …"
         cargo build --release
         bin=$(grep -m1 '^name' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
-        echo "dev-dash: launching (prod) …"
-        nohup "./target/release/$bin" >/dev/null 2>&1 &
+        echo "dev-dash: launching (prod; Restart rebuilds) …"
+        # Loop: run the binary; on the restart code rebuild and run again, else stop.
+        nohup bash -c '
+          restart=$1; bin=$2
+          while true; do
+            "./target/release/$bin"
+            [ $? -eq "$restart" ] || break
+            cargo build --release || break
+          done
+        ' _ "$restart_code" "$bin" >/dev/null 2>&1 &
         ;;
       *)
         echo "error: unknown open mode '$mode' (use 'dev' or omit for prod)" >&2
@@ -99,6 +123,23 @@ case "$cmd" in
     screencapture -x "$out"
     pkill -f "$bin" 2>/dev/null || true
     echo "dev-dash: captured $view -> $out"
+    exit 0
+    ;;
+
+  snap)
+    # Screenshot the ALREADY-RUNNING app — no build, no launch, no kill. For "look at my app
+    # and tell me what you see" against the owner's real, live data.
+    out="${2:-tmp/screenshots/live.png}"
+    bin_name=$(grep -m1 '^name' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+    if ! pgrep -f "$bin_name" >/dev/null 2>&1; then
+      echo "error: the app isn't running. Launch it with 'dev-dash open' first." >&2
+      exit 1
+    fi
+    mkdir -p "$(dirname "$out")"
+    osascript -e 'tell application "System Events" to set frontmost of (every process whose name contains "dev-dashboard") to true' 2>/dev/null || true
+    perl -e 'select(undef,undef,undef,1)'
+    screencapture -x "$out"
+    echo "dev-dash: captured live app -> $out"
     exit 0
     ;;
 

@@ -5,5 +5,5 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 require_docker
 echo "stopping postgres (data volume '$VOLUME_NAME' is preserved)..."
-docker compose down
+stop_db
 echo "done. Your data is safe in the named volume."

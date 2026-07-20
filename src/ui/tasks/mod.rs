@@ -9,19 +9,25 @@
 mod stage;
 mod ticket;
 
+use std::collections::HashSet;
+
 use uuid::Uuid;
 
 use crate::app::Bridge;
 use crate::app::tasks::{Message, View as TasksView};
 use crate::ui::theme;
 
+use stage::StageModal;
 use ticket::{NewTicketModal, TicketModal};
 
 /// All transient UI state for the board. Lives in the UI only.
 #[derive(Default)]
 pub struct BoardState {
     new_stage_name: String,
-    editing_stage: Option<(Uuid, String)>,
+    /// The open "edit stage" modal, if any (name + terminal toggle + delete).
+    editing_stage: Option<StageModal>,
+    /// Terminal stages whose tickets are currently revealed (via "View tickets").
+    viewing_terminal: HashSet<Uuid>,
     /// The open "new ticket" modal, if any (board-wide; one at a time).
     new_ticket: Option<NewTicketModal>,
     /// The open ticket detail modal, if any.

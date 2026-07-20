@@ -16,12 +16,18 @@ impl TicketService {
         Self { pool }
     }
 
-    /// All tickets across every stage, ordered by in-column position.
-    pub async fn list(&self) -> Result<Vec<Ticket>, DbError> {
+    /// All tickets in a profile (scoped via their stage), ordered by in-column position.
+    /// Tickets have no `profile_id` of their own — they inherit it from their stage, so this
+    /// joins `stages` rather than duplicating the column (the single source of truth).
+    pub async fn list(&self, profile_id: Uuid) -> Result<Vec<Ticket>, DbError> {
         sqlx::query_as::<_, Ticket>(
-            "SELECT id, stage_id, title, description, position, parent_id, created_at, updated_at \
-             FROM tickets ORDER BY position ASC, created_at ASC",
+            "SELECT t.id, t.stage_id, t.title, t.description, t.position, t.parent_id, \
+                    t.created_at, t.updated_at \
+             FROM tickets t JOIN stages s ON t.stage_id = s.id \
+             WHERE s.profile_id = $1 \
+             ORDER BY t.position ASC, t.created_at ASC",
         )
+        .bind(profile_id)
         .fetch_all(&self.pool)
         .await
         .map_err(|source| DbError::Query {
