@@ -4,5 +4,6 @@
 
 pub mod button;
 pub mod card;
+pub mod confirm;
 pub mod dnd;
 pub mod input;

@@ -208,8 +208,15 @@ impl WorktreeService {
     ) -> Result<Worktree, AppError> {
         let repo = self.project_path(project_id).await?;
         let path = worktree_path(&repo, name);
-        let new_branch = !git::branch_exists(&repo, branch).await;
-        git::worktree_add(&repo, &path, branch, new_branch).await?;
+        // If the target folder already exists, adopt it as-is: skip `git worktree add` (and branch
+        // creation) entirely. This happens when a folder was left on disk after its rows were
+        // cascade-deleted (deleting a profile or project drops worktree ROWS but not folders —
+        // §9, §10); git would otherwise error on the existing path. We trust the structure is set
+        // up for us and just (re)create the tracking row below.
+        if !path.exists() {
+            let new_branch = !git::branch_exists(&repo, branch).await;
+            git::worktree_add(&repo, &path, branch, new_branch).await?;
+        }
 
         sqlx::query_as::<_, Worktree>(
             "INSERT INTO worktrees (id, project_id, ticket_id, name, branch) \

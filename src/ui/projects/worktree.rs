@@ -7,6 +7,7 @@ use crate::app::Bridge;
 use crate::app::projects::{Event, ProjectCard, View as ProjectsView};
 use crate::app::tasks::View as TasksView;
 use crate::domain::projects::Worktree;
+use crate::ui::components::confirm::{self, Choice};
 use crate::ui::components::{button, card, input};
 use crate::ui::theme;
 
@@ -37,6 +38,7 @@ pub(super) fn render_project_worktrees(
     project_id: Uuid,
     projects: &ProjectsView,
     tasks: &TasksView,
+    remove: &mut Option<Uuid>,
 ) {
     let muted = theme::palette().muted;
     section_label(ui, "Worktrees");
@@ -59,7 +61,7 @@ pub(super) fn render_project_worktrees(
             .ticket(w.ticket_id)
             .map(|t| t.title.as_str())
             .unwrap_or("(ticket removed)");
-        worktree_row(ui, bridge, w, title, repo_path.as_deref());
+        worktree_row(ui, bridge, w, title, repo_path.as_deref(), remove);
     }
 
     let markers: Vec<&&Worktree> = all.iter().filter(|w| !w.is_live()).collect();
@@ -76,19 +78,20 @@ pub(super) fn render_project_worktrees(
                 .ticket(w.ticket_id)
                 .map(|t| t.title.as_str())
                 .unwrap_or("(ticket removed)");
-            worktree_row(ui, bridge, w, title, repo_path.as_deref());
+            worktree_row(ui, bridge, w, title, repo_path.as_deref(), remove);
         }
     }
 }
 
 /// One worktree row on the project detail page (keyed by its ticket). Live rows show Open +
-/// Remove; markers show Recreate.
+/// Remove; markers show Recreate. A Remove click is recorded into `remove` for confirmation.
 fn worktree_row(
     ui: &mut egui::Ui,
     bridge: &Bridge,
     w: &Worktree,
     ticket_title: &str,
     repo_path: Option<&str>,
+    remove: &mut Option<Uuid>,
 ) {
     let muted = theme::palette().muted;
     card::inset(ui, |ui| {
@@ -108,7 +111,7 @@ fn worktree_row(
             );
         }
         ui.add_space(6.0);
-        worktree_actions(ui, bridge, w);
+        worktree_actions(ui, bridge, w, remove);
     });
     ui.add_space(6.0);
 }
@@ -121,6 +124,7 @@ pub(crate) fn render_ticket_worktrees(
     bridge: &Bridge,
     ticket_id: Uuid,
     projects: &ProjectsView,
+    remove: &mut Option<Uuid>,
 ) -> bool {
     let muted = theme::palette().muted;
     let worktrees: Vec<&Worktree> = projects.worktrees_for_ticket(ticket_id).collect();
@@ -147,7 +151,7 @@ pub(crate) fn render_ticket_worktrees(
                         .size(12.5),
                 );
                 ui.add_space(6.0);
-                worktree_actions(ui, bridge, w);
+                worktree_actions(ui, bridge, w, remove);
             });
             ui.add_space(6.0);
         }
@@ -165,8 +169,10 @@ pub(crate) fn render_ticket_worktrees(
     button::ghost(ui, &format!("{} Create worktree", theme::icon::ADD)).clicked()
 }
 
-/// The action row for a worktree: Open + Remove when live, Recreate when a marker.
-fn worktree_actions(ui: &mut egui::Ui, bridge: &Bridge, w: &Worktree) {
+/// The action row for a worktree: Open + Remove when live, Recreate when a marker. Open and
+/// Recreate emit directly; Remove is destructive, so it only records the request into `remove`
+/// (the caller confirms before it fires — AGENTS.md §13).
+fn worktree_actions(ui: &mut egui::Ui, bridge: &Bridge, w: &Worktree, remove: &mut Option<Uuid>) {
     ui.horizontal(|ui| {
         if w.is_live() {
             if button::secondary(
@@ -178,7 +184,7 @@ fn worktree_actions(ui: &mut egui::Ui, bridge: &Bridge, w: &Worktree) {
                 bridge.send(Event::open_worktree(w.id));
             }
             if button::danger(ui, &format!("{} Remove", theme::icon::DELETE)).clicked() {
-                bridge.send(Event::remove_worktree(w.id));
+                *remove = Some(w.id);
             }
         } else if button::secondary(ui, &format!("{} Recreate", theme::icon::ADD)).clicked() {
             bridge.send(Event::recreate_worktree(w.id));
@@ -187,6 +193,49 @@ fn worktree_actions(ui: &mut egui::Ui, bridge: &Bridge, w: &Worktree) {
 }
 
 impl ProjectsState {
+    /// The remove-worktree confirmation (open only while `confirm_remove_worktree` is set).
+    /// Removing a worktree runs `git worktree remove` on its on-disk folder, so it's confirmed
+    /// first (AGENTS.md §13). Fired from both the project detail page and (via the shell) the
+    /// ticket detail.
+    pub(super) fn render_remove_worktree_modal(
+        &mut self,
+        ctx: &egui::Context,
+        bridge: &Bridge,
+        projects: &ProjectsView,
+    ) {
+        let Some(id) = self.confirm_remove_worktree else {
+            return;
+        };
+        let Some(w) = projects.worktrees.iter().find(|w| w.id == id) else {
+            self.confirm_remove_worktree = None; // gone from the snapshot; nothing to confirm
+            return;
+        };
+        let project = projects
+            .project(w.project_id)
+            .map(|c| c.project.name.clone())
+            .unwrap_or_else(|| "this project".to_owned());
+        let body = format!(
+            "Remove the worktree for branch “{}” in {project}? This runs `git worktree remove` on \
+             its folder (git refuses if it has uncommitted changes) and keeps a marker so you can \
+             recreate it later. The branch itself is left alone.",
+            w.branch
+        );
+        match confirm::destructive(
+            ctx,
+            ("remove_worktree", id),
+            "Remove worktree",
+            &body,
+            "Remove",
+        ) {
+            Choice::Confirmed => {
+                bridge.send(Event::remove_worktree(id));
+                self.confirm_remove_worktree = None;
+            }
+            Choice::Cancelled => self.confirm_remove_worktree = None,
+            Choice::Pending => {}
+        }
+    }
+
     /// The create-worktree picker (ticket-driven). Picks an eligible project (one with no
     /// worktree for this ticket yet); the branch is locked to the ticket's shared branch if it
     /// already has one, otherwise entered here (AGENTS.md §10).

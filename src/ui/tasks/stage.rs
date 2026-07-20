@@ -313,7 +313,9 @@ impl BoardState {
         }
 
         if delete {
-            bridge.send(Event::delete_stage(draft.id));
+            // Destructive → confirm first (AGENTS.md §13). Close the editor and hand off to the
+            // board's confirmation modal; the delete event only fires once the owner confirms.
+            self.confirm_delete_stage = Some(draft.id);
             self.editing_stage = None;
         } else if submit && !draft.name.trim().is_empty() {
             // Send only what actually changed, so we don't fire redundant events.

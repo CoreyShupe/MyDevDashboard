@@ -70,6 +70,11 @@ struct Outcome {
     close: bool,
     /// The detail asked to create a worktree for this ticket (the shell opens the picker).
     create_worktree: bool,
+    /// The owner clicked Delete — the board opens a confirmation before it actually deletes
+    /// (destructive, AGENTS.md §13).
+    request_delete: bool,
+    /// The owner asked to remove this worktree — routed to the projects UI to confirm (§13).
+    remove_worktree: Option<Uuid>,
 }
 
 impl BoardState {
@@ -130,6 +135,9 @@ impl BoardState {
         if out.create_worktree {
             self.pending_worktree = Some(ticket_id);
         }
+        if let Some(id) = out.remove_worktree {
+            self.pending_remove_worktree = Some(id);
+        }
         self.settle_detail(bridge, view, out, dismissed);
     }
 
@@ -178,6 +186,9 @@ impl BoardState {
         if out.create_worktree {
             self.pending_worktree = Some(ticket_id);
         }
+        if let Some(id) = out.remove_worktree {
+            self.pending_remove_worktree = Some(id);
+        }
         self.settle_detail_page(bridge, view, out);
     }
 
@@ -185,6 +196,12 @@ impl BoardState {
     fn settle_detail(&mut self, bridge: &Bridge, view: &TasksView, out: Outcome, dismissed: bool) {
         for event in out.events {
             bridge.send(event);
+        }
+        if out.request_delete {
+            // Open the confirmation but leave the detail up behind it (§13) — cancelling returns
+            // the owner to the ticket they were viewing.
+            self.confirm_delete_ticket = self.modal.as_ref().map(|m| m.ticket_id);
+            return;
         }
         if let Some(target) = out.navigate {
             if let Some(ticket) = view.ticket(target) {
@@ -199,6 +216,10 @@ impl BoardState {
     fn settle_detail_page(&mut self, bridge: &Bridge, view: &TasksView, out: Outcome) {
         for event in out.events {
             bridge.send(event);
+        }
+        if out.request_delete {
+            self.confirm_delete_ticket = self.modal.as_ref().map(|m| m.ticket_id);
+            return;
         }
         if let Some(target) = out.navigate {
             if let Some(ticket) = view.ticket(target) {
@@ -267,8 +288,8 @@ fn body_core(ui: &mut egui::Ui, modal: &mut TicketModal, view: &TasksView, out: 
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if button::danger(ui, &format!("{} Delete", theme::icon::DELETE)).clicked() {
-                out.events.push(Event::delete_ticket(ticket_id));
-                out.close = true;
+                // Ask, don't act: the board opens a confirmation and only then deletes (§13).
+                out.request_delete = true;
             }
         });
     });
@@ -304,9 +325,16 @@ fn body_worktrees(
     ui.label(egui::RichText::new("Worktrees").strong().size(15.0));
     ui.add_space(6.0);
     // Worktrees are a cross-feature (projects) concern; the projects UI renders this ticket's
-    // worktrees and reports whether the owner asked to create one (AGENTS.md §2). Open/remove/
-    // recreate emit projects events directly through the bridge.
-    if crate::ui::projects::render_ticket_worktrees(ui, bridge, modal.ticket_id, projects) {
+    // worktrees and reports whether the owner asked to create one (AGENTS.md §2). Open/recreate
+    // emit projects events directly; create + remove (destructive, §13) are reported back so the
+    // shell hands them to the projects UI (which opens the picker / confirmation).
+    if crate::ui::projects::render_ticket_worktrees(
+        ui,
+        bridge,
+        modal.ticket_id,
+        projects,
+        &mut out.remove_worktree,
+    ) {
         out.create_worktree = true;
     }
 }

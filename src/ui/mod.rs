@@ -22,6 +22,7 @@ use crate::app::{AppMessage, Bridge, UiEvent, ViewData};
 use crate::error::UserFacingError;
 
 use components::button;
+use components::confirm::{self, Choice};
 
 /// Which left-nav tab is active. One variant per feature surfaced in the workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +56,10 @@ pub struct DashboardApp {
     // owner switches profiles (so one profile's open modals don't bleed into another).
     active_profile_id: Option<Uuid>,
 
+    // A profile pending a delete confirmation, if any. Deleting cascades the whole workspace
+    // (§9), so it's confirmed at the shell (the switcher that triggers it lives in the nav).
+    confirm_delete_profile: Option<Uuid>,
+
     // False until the first worker snapshot lands. Until then we show a loading screen rather
     // than flashing onboarding — an empty default `ViewData` looks identical to "no profile".
     loaded: bool,
@@ -78,6 +83,7 @@ impl DashboardApp {
             error: None,
             new_profile_flow: false,
             active_profile_id: None,
+            confirm_delete_profile: None,
             loaded: false,
             dev_mode: false,
         };
@@ -97,6 +103,14 @@ impl DashboardApp {
             dev::DevView::NewProfile => {
                 self.data = Rc::new(dev::mock_board()); // existing profiles to switch back to
                 self.new_profile_flow = true;
+            }
+            dev::DevView::ProfileSelect => self.data = Rc::new(dev::mock_reselect()),
+            dev::DevView::ConfirmDelete => {
+                let data = dev::mock_board();
+                if let Some(ticket) = data.tasks.tickets.first() {
+                    self.board.dev_open_delete_ticket_confirm(ticket.id);
+                }
+                self.data = Rc::new(data);
             }
             dev::DevView::Board => self.data = Rc::new(dev::mock_board()),
             dev::DevView::Ticket => self.dev_open_ticket(false),
@@ -245,16 +259,21 @@ impl DashboardApp {
             .show(ui, |ui| {
                 ui.add_space(6.0);
                 // Profile switcher (replaces the old static name heading): switch profiles or
-                // start a new one. Everything below is scoped to the active profile (§9).
-                if profile::render_switcher(
+                // start a new one, or delete the current one. Everything below is scoped to the
+                // active profile (§9).
+                let switch = profile::render_switcher(
                     ui,
                     &self.bridge,
                     &data.profile,
                     profile::SwitcherStyle::Nav,
-                )
-                .new_profile
-                {
+                );
+                if switch.new_profile {
                     self.new_profile_flow = true;
+                }
+                if let Some(id) = switch.delete {
+                    // Confirm before wiping the whole workspace (§13); the modal renders at the
+                    // shell level so it sits over everything.
+                    self.confirm_delete_profile = Some(id);
                 }
                 ui.add_space(18.0);
 
@@ -349,6 +368,44 @@ impl DashboardApp {
         });
     }
 
+    /// The delete-profile confirmation (open only while `confirm_delete_profile` is set). Deleting
+    /// cascades the entire workspace (§9), so this is the last gate before it fires. After the
+    /// delete lands the next snapshot has no active profile, so the shell shows the picker /
+    /// onboarding — the owner is never silently dropped into another profile.
+    fn render_delete_profile_modal(
+        &mut self,
+        ctx: &egui::Context,
+        view: &crate::app::profile::View,
+    ) {
+        let Some(id) = self.confirm_delete_profile else {
+            return;
+        };
+        let Some(profile) = view.profiles.iter().find(|p| p.id == id) else {
+            self.confirm_delete_profile = None; // already gone
+            return;
+        };
+        let body = format!(
+            "Delete the “{}” profile and EVERYTHING in it? This permanently removes its stages, \
+             tickets, notes, projects, worktree records, and todos — it can't be undone. (Your \
+             repositories on disk are left untouched.)",
+            profile.display_name
+        );
+        match confirm::destructive(
+            ctx,
+            ("delete_profile", id),
+            "Delete profile",
+            &body,
+            "Delete profile",
+        ) {
+            Choice::Confirmed => {
+                self.bridge.send(crate::app::profile::Event::delete(id));
+                self.confirm_delete_profile = None;
+            }
+            Choice::Cancelled => self.confirm_delete_profile = None,
+            Choice::Pending => {}
+        }
+    }
+
     /// A blocking error alert: dims the app and traps input (AGENTS.md §3).
     ///
     /// For retryable (database) errors it offers a **Retry** button that re-attempts the
@@ -435,15 +492,17 @@ impl eframe::App for DashboardApp {
             return;
         }
 
-        // Three top-level screens: first-run onboarding (no profiles), the "new profile" create
-        // screen (opened from the switcher), or the dashboard for the active profile.
+        // Three top-level screens: onboarding when no profile is active (first-run when none
+        // exist, else a picker to reopen/create — e.g. after deleting the active one), the "new
+        // profile" create screen (opened from the switcher), or the dashboard.
         if !data.has_profile() {
-            self.onboarding.render(
-                &self.bridge,
-                ui,
-                profile::OnboardingMode::FirstRun,
-                &data.profile,
-            );
+            let mode = if data.profile.profiles.is_empty() {
+                profile::OnboardingMode::FirstRun
+            } else {
+                profile::OnboardingMode::Reselect
+            };
+            self.onboarding
+                .render(&self.bridge, ui, mode, &data.profile);
         } else if self.new_profile_flow {
             let leave = self.onboarding.render(
                 &self.bridge,
@@ -467,15 +526,25 @@ impl eframe::App for DashboardApp {
                 .render_create_modal(&ctx, &self.bridge, &data.tasks);
             self.board
                 .render_stage_modal(&ctx, &self.bridge, &data.tasks);
+            // Destructive confirmations for the board (delete ticket / delete stage), §13.
+            self.board
+                .render_confirmations(&ctx, &self.bridge, &data.tasks);
             self.notes.render_overlays(&ctx, &self.bridge, &data.tasks);
             // A "Create worktree" request raised by the open ticket detail is handed to the
             // projects UI, which owns the picker (cross-feature coordination, AGENTS.md §2).
             if let Some(ticket_id) = self.board.take_pending_worktree() {
                 self.projects.open_create_worktree(ticket_id);
             }
+            // Likewise a "Remove worktree" request — the projects UI owns the confirmation (§13).
+            if let Some(worktree_id) = self.board.take_pending_remove_worktree() {
+                self.projects.request_remove_worktree(worktree_id);
+            }
             self.projects
                 .render_overlays(&ctx, &self.bridge, &data.projects, &data.tasks);
         }
+        // Deleting a profile is triggered from the nav switcher; its confirmation sits above
+        // everything and stays valid across the has-profile / onboarding boundary (§9, §13).
+        self.render_delete_profile_modal(&ctx, &data.profile);
         self.render_error_modal(&ctx);
     }
 }

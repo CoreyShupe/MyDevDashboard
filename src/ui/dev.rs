@@ -23,6 +23,11 @@ pub enum DevView {
     Onboarding,
     /// The "new profile" create screen (opened from the switcher), over existing profiles.
     NewProfile,
+    /// The profile picker shown when no profile is active but others exist (e.g. the active one
+    /// was just deleted): choose one to open, or create a new one.
+    ProfileSelect,
+    /// A destructive-action confirmation (delete ticket) over the board — the shared confirm modal.
+    ConfirmDelete,
     Board,
     /// The ticket detail as a modal overlay.
     Ticket,
@@ -62,6 +67,8 @@ impl DevView {
         match std::env::var("DEV_VIEW").ok()?.trim() {
             "onboarding" => Some(Self::Onboarding),
             "new-profile" => Some(Self::NewProfile),
+            "profile-select" => Some(Self::ProfileSelect),
+            "confirm-delete" => Some(Self::ConfirmDelete),
             "board" => Some(Self::Board),
             "ticket" => Some(Self::Ticket),
             "page" => Some(Self::Page),
@@ -103,6 +110,29 @@ pub fn mock_empty() -> ViewData {
         profile: profile::View {
             profiles: vec![work.clone(), personal],
             active: Some(work),
+        },
+        ..ViewData::default()
+    }
+}
+
+/// A mock with profiles present but NONE active — the "pick a profile" state after the active
+/// one was deleted. The shell turns this into the reselect picker (AGENTS.md §9).
+pub fn mock_reselect() -> ViewData {
+    let now = Utc::now();
+    let work = Profile {
+        id: Uuid::new_v4(),
+        display_name: "Work".to_owned(),
+        created_at: now,
+    };
+    let personal = Profile {
+        id: Uuid::new_v4(),
+        display_name: "Personal".to_owned(),
+        created_at: now,
+    };
+    ViewData {
+        profile: profile::View {
+            profiles: vec![work, personal],
+            active: None,
         },
         ..ViewData::default()
     }
@@ -154,7 +184,7 @@ pub fn mock_board() -> ViewData {
     let mut tickets = vec![
         ticket(
             stages[0].id,
-            "Wire up GitHub Actions",
+            "Wire up GitHub Actions across every crate",
             "Run cargo build + clippy on every push",
             0,
         ),

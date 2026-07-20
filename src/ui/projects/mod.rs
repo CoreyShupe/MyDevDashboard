@@ -33,6 +33,9 @@ pub struct ProjectsState {
     open_project: Option<Uuid>,
     /// A project pending a delete confirmation, if any.
     confirm_delete_project: Option<Uuid>,
+    /// A worktree pending a remove confirmation, if any (destructive → confirmed first, §13).
+    /// Set both from the project detail page and, via the shell, from the ticket detail.
+    confirm_remove_worktree: Option<Uuid>,
     /// The open "create worktree" modal (driven from a ticket), if any.
     creating_worktree: Option<NewWorktreeModal>,
 }
@@ -67,6 +70,7 @@ impl ProjectsState {
     ) {
         self.render_add_project_modal(ctx, bridge);
         self.render_confirm_delete_modal(ctx, bridge, projects);
+        self.render_remove_worktree_modal(ctx, bridge, projects);
         self.render_create_worktree_modal(ctx, bridge, projects, tasks);
     }
 
@@ -85,12 +89,26 @@ impl ProjectsState {
         {
             self.confirm_delete_project = None;
         }
+        // Drop a pending remove-confirmation if the worktree is gone or already a marker.
+        if self
+            .confirm_remove_worktree
+            .is_some_and(|id| !projects.worktrees.iter().any(|w| w.id == id && w.is_live()))
+        {
+            self.confirm_remove_worktree = None;
+        }
     }
 
     /// Open the create-worktree picker for a ticket. Called by the app shell when the ticket
     /// detail (tasks feature) requests it (AGENTS.md §2 cross-feature coordination).
     pub fn open_create_worktree(&mut self, ticket_id: Uuid) {
         self.creating_worktree = Some(NewWorktreeModal::new(ticket_id));
+    }
+
+    /// Open the remove-worktree confirmation for `id`. Called by the app shell when the ticket
+    /// detail asks to remove one (cross-feature, §2 + §13); the project detail page sets it
+    /// directly. The projects overlays own the actual confirmation modal.
+    pub fn request_remove_worktree(&mut self, worktree_id: Uuid) {
+        self.confirm_remove_worktree = Some(worktree_id);
     }
 
     /// Dev-only: open a project's detail page directly for review (see `ui::dev`).

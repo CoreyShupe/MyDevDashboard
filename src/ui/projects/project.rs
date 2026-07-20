@@ -7,6 +7,7 @@ use crate::app::Bridge;
 use crate::app::projects::{ProjectCard, View as ProjectsView};
 use crate::app::tasks::View as TasksView;
 use crate::domain::projects::GitStatus;
+use crate::ui::components::confirm::{self, Choice};
 use crate::ui::components::{button, card, input};
 use crate::ui::theme;
 
@@ -130,6 +131,7 @@ impl ProjectsState {
         ui.add_space(10.0);
 
         let mut delete = false;
+        let mut remove_worktree: Option<Uuid> = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -153,12 +155,22 @@ impl ProjectsState {
                     delete = render_meta(&mut cols[0], c, projects.refreshing);
 
                     cols[1].spacing_mut().item_spacing.x = 8.0;
-                    worktree::render_project_worktrees(&mut cols[1], bridge, id, projects, tasks);
+                    worktree::render_project_worktrees(
+                        &mut cols[1],
+                        bridge,
+                        id,
+                        projects,
+                        tasks,
+                        &mut remove_worktree,
+                    );
                 });
             });
 
         if delete {
             self.confirm_delete_project = Some(id);
+        }
+        if let Some(worktree_id) = remove_worktree {
+            self.confirm_remove_worktree = Some(worktree_id);
         }
     }
 
@@ -252,7 +264,7 @@ impl ProjectsState {
         }
     }
 
-    /// The confirm-delete-project modal overlay.
+    /// The confirm-delete-project modal overlay (shared confirm component, §13).
     pub(super) fn render_confirm_delete_modal(
         &mut self,
         ctx: &egui::Context,
@@ -262,47 +274,29 @@ impl ProjectsState {
         let Some(id) = self.confirm_delete_project else {
             return;
         };
-        let p = theme::palette();
         let name = projects
             .project(id)
             .map(|c| c.project.name.clone())
             .unwrap_or_default();
-        let mut confirm = false;
-        let mut cancel = false;
-
-        let response = egui::Modal::new(egui::Id::new(("delete_project", id)))
-            .frame(theme::surface_frame())
-            .show(ctx, |ui| {
-                ui.set_max_width(440.0);
-                ui.label(
-                    egui::RichText::new(format!("{} Delete project", theme::icon::WARNING))
-                        .heading()
-                        .color(p.danger),
-                );
-                ui.add_space(8.0);
-                ui.label(format!(
-                    "Remove “{name}” from your dashboard? This only forgets it here — the \
-                     repository on disk (and any worktree folders inside it) are left untouched. \
-                     Its worktree records are discarded."
-                ));
-                ui.add_space(14.0);
-                ui.horizontal(|ui| {
-                    confirm =
-                        button::danger(ui, &format!("{} Delete", theme::icon::DELETE)).clicked();
-                    cancel = button::secondary(ui, "Cancel").clicked();
-                });
-            });
-
-        if response.should_close() {
-            cancel = true;
-        }
-
-        if confirm {
-            bridge.send(crate::app::projects::Event::delete_project(id));
-            self.confirm_delete_project = None;
-            self.open_project = None;
-        } else if cancel {
-            self.confirm_delete_project = None;
+        let body = format!(
+            "Remove “{name}” from your dashboard? This only forgets it here — the repository on \
+             disk (and any worktree folders inside it) are left untouched. Its worktree records \
+             are discarded."
+        );
+        match confirm::destructive(
+            ctx,
+            ("delete_project", id),
+            "Delete project",
+            &body,
+            "Delete",
+        ) {
+            Choice::Confirmed => {
+                bridge.send(crate::app::projects::Event::delete_project(id));
+                self.confirm_delete_project = None;
+                self.open_project = None; // also leave the now-gone detail page
+            }
+            Choice::Cancelled => self.confirm_delete_project = None,
+            Choice::Pending => {}
         }
     }
 }

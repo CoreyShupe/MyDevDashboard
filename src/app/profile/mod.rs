@@ -22,6 +22,8 @@ pub enum Event {
     Create { display_name: String },
     /// Switch which profile is active.
     Switch { id: Uuid },
+    /// Delete a profile and its entire workspace (cascades). Destructive → the UI confirms first.
+    Delete { id: Uuid },
 }
 
 impl Event {
@@ -30,6 +32,9 @@ impl Event {
     }
     pub fn switch(id: Uuid) -> Self {
         Self::Switch { id }
+    }
+    pub fn delete(id: Uuid) -> Self {
+        Self::Delete { id }
     }
 }
 
@@ -86,6 +91,9 @@ pub async fn handle(backend: &Backend, emitter: &Emitter, event: Event) {
         // active). The owner lands on that profile's empty board and builds it up themselves.
         Event::Create { display_name } => backend.profile.create(&display_name).await.map(|_| ()),
         Event::Switch { id } => backend.profile.set_active(id).await,
+        // Cascades to the whole workspace; leaves no active profile, so the next snapshot lands
+        // the owner on the picker/onboarding (AGENTS.md §9).
+        Event::Delete { id } => backend.profile.delete(id).await,
     };
     emitter.settle(backend, result).await;
 }

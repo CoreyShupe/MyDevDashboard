@@ -42,10 +42,11 @@ allowlisted (it will prompt) — use the wrapper.
 | Launch the app detached (in-app Restart rebuilds/relaunches) | `./dev-dash open [dev]` |
 | Database up / down / wipe+restart / shell | `./dev-dash db up` · `db down` · `db reset` · `db psql` |
 
-`VIEW` ∈ `onboarding · new-profile · board · board-empty · ticket · page · create · stage-edit ·
-notes · notes-empty · notes-file · todos · todos-empty · projects · projects-empty ·
-projects-loading · add-project · project · loading · error` (defined in `ui/dev.rs`; see §8). Every one has a committed screenshot under
-`screenshots/` (§11). **Never edit `dev-dash` itself** (trust boundary, §6).
+`VIEW` ∈ `onboarding · new-profile · profile-select · board · board-empty · ticket · page ·
+create · stage-edit · confirm-delete · notes · notes-empty · notes-file · todos · todos-empty ·
+projects · projects-empty · projects-loading · add-project · project · loading · error` (defined
+in `ui/dev.rs`; see §8). Every one has a committed screenshot under `screenshots/` (§11).
+**Never edit `dev-dash` itself** (trust boundary, §6).
 
 **Before you're done:** `cargo fmt` → `cargo clippy` (clean) → `./dev-dash build` → **screenshot
 every screen you touched** (§8). No unit tests (§6). If you added a crate/feature/table/error
@@ -53,7 +54,7 @@ variant/module, update **this file + `README.md`** in the same change (§6).
 
 **Never:** `.unwrap()`/`.expect()` in app code (§3) · seed data (§5) · let anything escape its
 profile (§9) · hardcode a color/frame outside `ui/theme.rs`+`ui/components/` (§7) · import
-`system/`/`sqlx` from `ui/` (§2).
+`system/`/`sqlx` from `ui/` (§2) · delete/remove data without a confirmation (§13).
 
 ---
 
@@ -473,12 +474,14 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 |--------|--------|
 | `onboarding`  | First-run: create your first profile |
 | `new-profile` | "New profile" create screen (switcher top-left) over existing profiles |
+| `profile-select` | Profile picker: no active profile but others exist (post-delete / reselect) |
 | `board`          | Populated Tasks board (profiles "Work"/"Personal") |
 | `board-empty`    | Tasks board with no stages (empty state) |
 | `ticket`         | Ticket detail modal |
 | `page`           | Ticket detail, full-page (expanded) |
 | `create`         | New-ticket create modal (with stage picker) |
 | `stage-edit`     | Edit-stage modal (name + terminal toggle + delete) |
+| `confirm-delete` | Destructive-action confirmation (delete ticket) — the shared confirm modal |
 | `notes`          | Notes tab, populated |
 | `notes-empty`    | Notes tab with no notes (empty state) |
 | `notes-file`     | Notes tab with the "Add to ticket" picker open |
@@ -516,28 +519,40 @@ gated solely by the env var — never wire them into a normal run.
 
 How it's enforced (keep new data consistent with this):
 
-- **Exactly one active profile.** `profiles.is_active` (partial unique index → at most one true)
-  marks it; `ProfileService::set_active` flips it atomically with
+- **Exactly one — or zero — active profiles.** `profiles.is_active` (partial unique index → at
+  most one true) marks it; `ProfileService::set_active` flips it atomically with
   `UPDATE profiles SET is_active = (id = $1)`. `create()` makes the new profile active. `active()`
-  returns it (falling back to the oldest profile so a pre-multi-profile DB still resolves).
+  returns ONLY the explicitly-active row (`WHERE is_active`), or `None` — it deliberately does
+  NOT fall back to the oldest profile. So "no active profile" is a real state: first run (no
+  profiles) OR right after the active profile was deleted.
+- **Deleting a profile** (`ProfileService::delete`, from the nav switcher's "Delete current
+  profile", behind a confirmation — §13) removes the row; the cascade below wipes its ENTIRE
+  workspace. It does NOT activate another profile — the owner chooses next on the picker (below).
+  Deleting every profile is how you wipe the DB. (On-disk worktree folders survive, like project
+  delete; the create guard in §10 adopts them if a worktree is ever remade.)
 - **Scoping columns.** Top-level tables carry `profile_id … REFERENCES profiles(id) ON DELETE
   CASCADE` (`stages`, `uncategorized_notes`, `projects`, `todos`). Nested entities inherit their profile
   through their parent rather than duplicating the column: **tickets** via their `stage` (list
   joins `stages`), **ticket-notes** via their `ticket`, **worktrees** via their `project` (lists
-  join `projects`). Deleting a profile cascades its whole workspace.
+  join `projects`). Deleting a profile cascades its whole workspace (stages→tickets→notes/worktrees,
+  uncategorized_notes, projects→worktrees, todos) in one `DELETE`.
 - **Resolving the active profile.** Handlers that create profile-scoped rows call
   `app::profile::active_id(&Backend) -> Result<Uuid, AppError>` (a `ProfileError::NoActive` if
   none) so the UI never threads a profile id through events. `ViewData::load` scopes the board,
   notes, projects, and todos to `profile.active_id()`; a fresh snapshot after any change reloads
   the active profile's data.
 - **UI.** The nav shows a **profile switcher** (`ui/profile::render_switcher`, `SwitcherStyle::Nav`)
-  — switch profiles or pick "New profile" (→ the new-profile onboarding flow). The onboarding
-  screen has two modes (`OnboardingMode::{FirstRun, NewProfile}`); **new-profile mode** shows a
-  top-left escape hatch — a **Back** link and a compact switcher — so you can leave without
-  creating one (Back and picking any profile, including the current one, both exit; the switcher
-  reports this via `SwitcherOutcome::selected_current`). **First-run has no escape** (no profile
-  to return to). The shell resets transient board/notes/projects/todos state when the active
-  profile changes so one profile's open modals don't bleed into another.
+  — switch profiles, pick "New profile" (→ the new-profile onboarding flow), or "Delete current
+  profile" (→ the shell's delete confirmation). The onboarding screen has three modes
+  (`OnboardingMode::{FirstRun, NewProfile, Reselect}`); **new-profile mode** shows a top-left
+  escape hatch — a **Back** link and a compact switcher — so you can leave without creating one
+  (Back and picking any profile, including the current one, both exit; reported via
+  `SwitcherOutcome::selected_current`). **First-run has no escape** (no profile to return to).
+  **Reselect** is the "no active profile but others exist" state (e.g. just deleted the active
+  one): the shell shows it (via `DashboardApp::render` choosing FirstRun vs Reselect on the
+  profiles list) with a switcher to open one + a create field, but no Back. The shell resets
+  transient board/notes/projects/todos state when the active profile changes so one profile's
+  open modals don't bleed into another.
 
 ---
 
@@ -598,6 +613,11 @@ never deviate) and is tied **1:1 to a ticket** within a project:
   and **reused** for every later worktree of that ticket, in any project — so a ticket's work
   sits on the same branch name everywhere. Different projects are different repos, so each still
   gets its own `-b` branch creation.
+- **Adopt an existing folder.** `worktree::provision` checks the target path FIRST: if the folder
+  already exists it skips `git worktree add` (and branch creation) entirely and just (re)creates
+  the tracking row. This is deliberate — deleting a profile or project drops worktree ROWS via the
+  cascade but leaves the on-disk folders (§9), so a later create at the same path must adopt what's
+  there rather than let git error on an existing path. We trust the structure was set up for us.
 - **Delete leaves a marker.** Removing a worktree (via the UI, or the cleanup on ticket delete)
   runs `git worktree remove` (NOT forced — a dirty tree makes git refuse, and that surfaces so
   nothing is lost) and sets `removed_at`, keeping the row as a **historical marker** of the
@@ -635,12 +655,12 @@ tables + inline thumbnails); regenerate/extend it alongside the images.
 
 | Folder | Screens (`DEV_VIEW`) |
 |--------|----------------------|
-| `profile/`  | `onboarding`, `new-profile` |
+| `profile/`  | `onboarding`, `new-profile`, `profile-select` |
 | `tasks/`    | `board`, `board-empty`, `ticket`, `page`, `create`, `stage-edit` |
 | `notes/`    | `notes`, `notes-empty`, `notes-file` |
 | `todos/`    | `todos`, `todos-empty` |
 | `projects/` | `projects`, `projects-empty`, `projects-loading`, `add-project`, `project` |
-| `shell/`    | `error`, `loading` (cross-cutting, not tied to a tab) |
+| `shell/`    | `error`, `loading`, `confirm-delete` (cross-cutting, not tied to a tab) |
 
 **The invariant (must always hold):**
 1. **Every `DEV_VIEW` has a mock AND a committed screenshot.** Adding a `DevView` variant
@@ -720,3 +740,28 @@ a default (or nullable), a new index. When in doubt, ask.
 **Agent permissions** (`.claude/settings.json`) enforce this: only `dev-dash build|shot|snap|
 sandbox` and `cargo fmt|clippy` are allowed; `dev-dash db` and `dev-dash open` are denied. Drive
 the sandbox through `dev-dash sandbox`, not the raw `scripts/sandbox-db.sh`.
+
+---
+
+## 13. Destructive actions need confirmation
+
+> **Every action that deletes or removes data/files is confirmed before it fires.** The owner
+> holds real data (§12), so a delete must never be one stray click. New destructive actions
+> follow this from day one.
+
+**Transformative actions are NOT destructive — do NOT confirm them.** Turning a note into a
+ticket, a note into a todo, filing a note onto a ticket, or completing a todo all delete/replace
+the source as part of *becoming something else*. They fire immediately; a confirmation there
+would be noise.
+
+**One shared modal.** `ui/components/confirm::destructive(ctx, id_salt, title, body, confirm_label)
+-> Choice` renders the single, consistent confirmation (red warning title, body, Delete/Cancel;
+backdrop/Escape = Cancel). Never hand-roll a confirm dialog — use this so they all look alike.
+
+**The pattern.** The feature's UI state holds an `Option<Id>` "pending confirm" slot. The danger
+button *sets the slot* (it does NOT send the event); an overlay renderer shows `confirm::destructive`
+while the slot is set; `Choice::Confirmed` sends the real event and clears the slot, `Cancelled`
+just clears it. `reconcile` clears a slot whose entity vanished from the snapshot. Currently
+gated: **delete ticket, delete stage, delete todo, remove worktree, delete project, delete
+profile.** Cross-feature ones (remove-worktree raised from the ticket detail) route the request
+to the owning feature via the shell, exactly like the create-worktree hand-off (§2).

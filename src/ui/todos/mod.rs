@@ -11,9 +11,12 @@
 //! Pure rendering (AGENTS.md §2): mutations go out as `todos::Event`s. No overlays — every
 //! action is inline, so there's nothing for the shell to coordinate.
 
+use uuid::Uuid;
+
 use crate::app::Bridge;
 use crate::app::todos::{Event, View as TodosView};
 use crate::domain::todos::Todo;
+use crate::ui::components::confirm::{self, Choice};
 use crate::ui::components::{button, card, input};
 use crate::ui::theme;
 
@@ -22,6 +25,8 @@ use crate::ui::theme;
 pub struct TodosState {
     /// Composer buffer for the "New todo" field.
     new_todo: String,
+    /// A todo pending a delete confirmation, if any (destructive → confirmed first, §13).
+    confirm_delete: Option<Uuid>,
 }
 
 impl TodosState {
@@ -34,6 +39,9 @@ impl TodosState {
 
         self.render_composer(ui, bridge);
         ui.add_space(14.0);
+
+        // A delete is destructive, so it's confirmed before it fires (AGENTS.md §13).
+        self.render_delete_confirm(ui.ctx().clone(), bridge, view);
 
         // Completed todos are hidden — the list is only what's still open.
         let open: Vec<&Todo> = view.todos.iter().filter(|t| !t.done).collect();
@@ -48,14 +56,40 @@ impl TodosState {
             return;
         }
 
+        let mut to_delete: Option<Uuid> = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for todo in open {
-                    render_todo_row(ui, bridge, todo);
+                    if render_todo_row(ui, bridge, todo) {
+                        to_delete = Some(todo.id);
+                    }
                     ui.add_space(10.0);
                 }
             });
+        if let Some(id) = to_delete {
+            self.confirm_delete = Some(id);
+        }
+    }
+
+    /// The delete-todo confirmation overlay (open only while `confirm_delete` is set).
+    fn render_delete_confirm(&mut self, ctx: egui::Context, bridge: &Bridge, view: &TodosView) {
+        let Some(id) = self.confirm_delete else {
+            return;
+        };
+        let Some(todo) = view.todos.iter().find(|t| t.id == id) else {
+            self.confirm_delete = None; // it vanished from the snapshot; nothing to confirm
+            return;
+        };
+        let body = format!("Delete this todo? This can't be undone.\n\n“{}”", todo.body);
+        match confirm::destructive(&ctx, ("delete_todo", id), "Delete todo", &body, "Delete") {
+            Choice::Confirmed => {
+                bridge.send(Event::delete(id));
+                self.confirm_delete = None;
+            }
+            Choice::Cancelled => self.confirm_delete = None,
+            Choice::Pending => {}
+        }
     }
 
     /// Top composer: single-line field + Add button. Enter also submits, and focus returns to
@@ -84,9 +118,11 @@ impl TodosState {
 }
 
 /// A single OPEN todo row: done checkbox (left), wrapped body + timestamp (center), delete
-/// (right). Checking the box completes the todo, which hides it on the next snapshot.
-fn render_todo_row(ui: &mut egui::Ui, bridge: &Bridge, todo: &Todo) {
+/// (right). Checking the box completes the todo, which hides it on the next snapshot. Returns
+/// true if the owner clicked delete (the caller confirms before the row is actually removed).
+fn render_todo_row(ui: &mut egui::Ui, bridge: &Bridge, todo: &Todo) -> bool {
     let muted = theme::palette().muted;
+    let mut delete_requested = false;
 
     card::card(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -138,10 +174,11 @@ fn render_todo_row(ui: &mut egui::Ui, bridge: &Bridge, todo: &Todo) {
                 egui::Layout::right_to_left(egui::Align::Min),
                 |ui| {
                     if button::icon(ui, theme::icon::DELETE, "Delete todo").clicked() {
-                        bridge.send(Event::delete(todo.id));
+                        delete_requested = true;
                     }
                 },
             );
         });
     });
+    delete_requested
 }

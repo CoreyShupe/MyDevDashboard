@@ -20,6 +20,9 @@ pub enum OnboardingMode {
     FirstRun,
     /// Adding another profile from the switcher (existing profiles remain to switch back to).
     NewProfile,
+    /// No profile is active but others exist (e.g. the active one was just deleted): pick one to
+    /// open, or create a fresh one. Like `NewProfile` but with no active profile to go "Back" to.
+    Reselect,
 }
 
 /// Visual weight for the switcher — prominent in the nav, compact on the onboarding screen.
@@ -39,6 +42,9 @@ pub struct SwitcherOutcome {
     /// User picked the profile that's *already* active — no switch needed, but on the
     /// new-profile screen it means "take me back to this profile" (exit the flow).
     pub selected_current: bool,
+    /// User picked "Delete current profile" (nav only). Carries the profile id to delete; the
+    /// caller opens a confirmation (destructive → cascades the whole workspace, §9 + §13).
+    pub delete: Option<uuid::Uuid>,
 }
 
 /// A profiles dropdown: lists every profile (active one checked), and — in the nav — a
@@ -85,8 +91,8 @@ pub fn render_switcher(
                     }
                 }
             }
-            // "New profile" is a nav affordance; the onboarding switcher is only an escape
-            // hatch back to an existing profile.
+            // "New profile" and "Delete current profile" are nav affordances; the onboarding
+            // switcher is only an escape hatch back to an existing profile.
             if style == SwitcherStyle::Nav {
                 ui.separator();
                 if ui
@@ -94,6 +100,16 @@ pub fn render_switcher(
                     .clicked()
                 {
                     out.new_profile = true;
+                }
+                if let Some(active_id) = view.active_id() {
+                    let label = egui::RichText::new(format!(
+                        "{} Delete current profile",
+                        theme::icon::DELETE
+                    ))
+                    .color(p.danger);
+                    if ui.selectable_label(false, label).clicked() {
+                        out.delete = Some(active_id);
+                    }
                 }
             }
         });
@@ -129,13 +145,15 @@ impl OnboardingState {
                     .inner_margin(egui::Margin::same(18)),
             )
             .show(ui, |ui| {
-                // New-profile mode: a compact switcher + a Back button pinned top-left, so you
-                // can bail out without creating one — either by picking any existing profile
-                // (including the current one) or via Back, which returns to the active profile.
-                // (First-run has no escape: there's no profile to go back to.)
-                if mode == OnboardingMode::NewProfile {
+                // A compact switcher pinned top-left lets you pick an existing profile instead of
+                // creating one. New-profile mode also gets a Back button (there's an active
+                // profile to return to); Reselect has none (nothing is active after a delete).
+                // First-run has neither: no profile exists yet.
+                if mode == OnboardingMode::NewProfile || mode == OnboardingMode::Reselect {
                     ui.horizontal(|ui| {
-                        if button::link(ui, &format!("{} Back", theme::icon::BACK)).clicked() {
+                        if mode == OnboardingMode::NewProfile
+                            && button::link(ui, &format!("{} Back", theme::icon::BACK)).clicked()
+                        {
                             leave = true;
                         }
                         let out = render_switcher(ui, bridge, view, SwitcherStyle::Onboarding);
@@ -155,6 +173,10 @@ impl OnboardingState {
                         OnboardingMode::NewProfile => (
                             "New profile",
                             "Name a fresh, separate workspace — its own stages, tickets, and notes.",
+                        ),
+                        OnboardingMode::Reselect => (
+                            "Choose a profile",
+                            "Pick a workspace to open from the switcher above, or create a new one.",
                         ),
                     };
                     ui.label(egui::RichText::new(heading).heading());

@@ -44,8 +44,25 @@ impl BoardState {
             let mut handle_rect = egui::Rect::NOTHING;
             card::inset(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&ticket.title).strong());
+                // The 6-dot grip lives in its OWN right-hand gutter that the title can never
+                // enter: reserve a fixed width for the handle, then wrap the (char-capped)
+                // title into the remaining space so long titles grow downward, not sideways.
+                const HANDLE_GUTTER: f32 = 22.0;
+                ui.horizontal_top(|ui| {
+                    let title_width = (ui.available_width() - HANDLE_GUTTER).max(0.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(title_width, 0.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_width(title_width);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(truncate_title(&ticket.title)).strong(),
+                                )
+                                .wrap(),
+                            );
+                        },
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                         handle_rect = ui
                             .add(
@@ -107,6 +124,30 @@ impl BoardState {
         bridge.send(Event::load_notes(ticket.id));
         self.modal = Some(detail::TicketModal::new(ticket));
     }
+}
+
+/// Cap a ticket title at 23 chars for the card, but break at a word boundary so a word is
+/// never sliced mid-way — back up to the last space when the cap lands inside a word (unless
+/// the very first word already exceeds the cap, where a hard cut is the only option). The
+/// card renders this wrapped, so the kept text can still flow onto a second line by its spaces.
+fn truncate_title(s: &str) -> String {
+    const MAX: usize = 23;
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= MAX {
+        return s.to_owned();
+    }
+    let capped: String = chars[..MAX].iter().collect();
+    // If the first dropped char is whitespace the cap already sits on a word boundary; else
+    // retreat to the last space so we don't cut a word in half.
+    let cut = if chars[MAX].is_whitespace() {
+        capped.trim_end()
+    } else {
+        match capped.rfind(char::is_whitespace) {
+            Some(idx) => capped[..idx].trim_end(),
+            None => capped.trim_end(), // single over-long word — hard cap
+        }
+    };
+    format!("{cut}…")
 }
 
 /// Truncate a string to at most `max` chars, appending an ellipsis if cut.

@@ -34,14 +34,15 @@ impl ProfileService {
         })
     }
 
-    /// The active profile (the one whose workspace is shown), or `None` on first run.
+    /// The explicitly-active profile (the one whose workspace is shown), or `None`.
     ///
-    /// Prefers the explicitly-active row; falls back to the oldest profile so a DB migrated
-    /// from the single-profile era (no active flag set yet) still resolves to a profile.
+    /// `None` means "no profile is active" — either first run (no profiles at all) or the active
+    /// profile was just deleted. The UI turns that into onboarding (no profiles) or a profile
+    /// picker (others remain). There is deliberately NO fallback to the oldest profile: after a
+    /// delete the owner chooses which workspace to open rather than being dropped into one.
     pub async fn active(&self) -> Result<Option<Profile>, DbError> {
         sqlx::query_as::<_, Profile>(
-            "SELECT id, display_name, created_at FROM profiles \
-             ORDER BY is_active DESC, created_at ASC LIMIT 1",
+            "SELECT id, display_name, created_at FROM profiles WHERE is_active LIMIT 1",
         )
         .fetch_optional(&self.pool)
         .await
@@ -87,6 +88,32 @@ impl ProfileService {
                 context: "set active profile",
                 source,
             })?;
+        Ok(())
+    }
+
+    /// Delete a profile and, via `ON DELETE CASCADE`, its ENTIRE workspace — stages, tickets,
+    /// notes, projects, worktree rows, and todos (AGENTS.md §9). Deliberately does NOT activate
+    /// another profile: if this was the active one, the app lands on the picker/onboarding so the
+    /// owner chooses next (see [`active`](Self::active)). On-disk worktree folders are left as-is
+    /// (same as project delete) — the create guard adopts them if a worktree is ever remade.
+    pub async fn delete(&self, id: Uuid) -> Result<(), AppError> {
+        let affected = sqlx::query("DELETE FROM profiles WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|source| DbError::Query {
+                context: "delete profile",
+                source,
+            })?
+            .rows_affected();
+
+        if affected == 0 {
+            return Err(DbError::NotFound {
+                entity: "profile",
+                id: id.to_string(),
+            }
+            .into());
+        }
         Ok(())
     }
 }
