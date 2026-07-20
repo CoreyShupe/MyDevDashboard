@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::app::{ViewData, profile, tasks};
 use crate::domain::profile::Profile;
-use crate::domain::tasks::{Stage, Ticket};
+use crate::domain::tasks::{Note, Stage, Ticket};
 use crate::error::UserFacingError;
 
 /// Which screen to force. Selected via `DEV_VIEW={onboarding|board|ticket|page|error}`.
@@ -105,6 +105,31 @@ pub fn mock_board() -> ViewData {
         profile,
         tasks: tasks::View { stages, tickets },
     }
+}
+
+/// Mock notes for a ticket detail screen — enough (5) that the modal's 2-note cap kicks in
+/// (showing "3 earlier notes not shown") and the full page's wide notes column has body.
+/// Oldest-first, matching how real notes arrive.
+pub fn mock_notes(ticket_id: Uuid) -> Vec<Note> {
+    let now = Utc::now();
+    let bodies = [
+        "Kicked this off — scoped the work and pulled the relevant modules.",
+        "Blocked on the migration; pinged the DB owner for a review.",
+        "Unblocked. Rewrote the query to avoid the N+1 and it's ~4x faster now.",
+        "Draft up for review. Left two TODOs around error handling.",
+        "Addressed review feedback; ready for a final pass.",
+    ];
+    bodies
+        .iter()
+        .enumerate()
+        .map(|(i, body)| Note {
+            id: Uuid::new_v4(),
+            ticket_id,
+            body: (*body).to_owned(),
+            // Space them an hour apart so the timestamps read as a plausible history.
+            created_at: now - chrono::Duration::hours((bodies.len() - i) as i64),
+        })
+        .collect()
 }
 
 /// A sample error for the error-modal screen.

@@ -2,9 +2,11 @@
 //!   - a **modal** overlay (default), and
 //!   - a **full page** in the workspace (via the modal's expand button; Back returns).
 //!
-//! Both share one editing state ([`TicketModal`]) and one body renderer ([`body`]); the
-//! only difference is the surrounding chrome. Intents are collected and dispatched after
-//! the state's mutable borrow ends.
+//! Both share one editing state ([`TicketModal`]) and the same body renderers
+//! ([`body_main`] plus [`notes_section`]); they differ only in the surrounding chrome and
+//! how they lay those out — the modal stacks a capped notes list under the body, the full
+//! page puts the full notes list in a wide column beside it. Intents are collected and
+//! dispatched after the state's mutable borrow ends.
 
 use uuid::Uuid;
 
@@ -91,7 +93,12 @@ impl BoardState {
                     });
                 });
                 ui.add_space(10.0);
-                body(ui, modal, view, &mut out);
+                body_main(ui, modal, view, &mut out);
+                ui.add_space(14.0);
+                ui.separator();
+                ui.add_space(6.0);
+                // Modal stays compact: show only the last 2 notes with a "N more" line.
+                notes_section(ui, modal, &mut out, Some(2));
             });
 
         let dismissed = response.should_close();
@@ -122,10 +129,15 @@ impl BoardState {
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.scope(|ui| {
-                        ui.set_max_width(760.0);
+                        ui.set_max_width(1120.0);
                         ui.heading("Ticket");
                         ui.add_space(12.0);
-                        body(ui, modal, view, &mut out);
+                        // Two columns: all the ticket data on the left, the full notes list
+                        // as a wide column on the right.
+                        ui.columns(2, |cols| {
+                            body_main(&mut cols[0], modal, view, &mut out);
+                            notes_section(&mut cols[1], modal, &mut out, None);
+                        });
                     });
                 });
             });
@@ -165,8 +177,10 @@ impl BoardState {
     }
 }
 
-/// The shared detail body: title, description, actions, relationships, notes.
-fn body(ui: &mut egui::Ui, modal: &mut TicketModal, view: &TasksView, out: &mut Outcome) {
+/// The main detail body: title, description, actions, relationships. The notes section is
+/// rendered separately so each presentation can place it differently — the modal appends a
+/// capped list below this, the full page gives it its own wide column beside this.
+fn body_main(ui: &mut egui::Ui, modal: &mut TicketModal, view: &TasksView, out: &mut Outcome) {
     let muted = theme::palette().muted;
     let ticket_id = modal.ticket_id;
     let current_stage = view.ticket(ticket_id).map(|t| t.stage_id);
@@ -210,13 +224,20 @@ fn body(ui: &mut egui::Ui, modal: &mut TicketModal, view: &TasksView, out: &mut 
     ui.label(egui::RichText::new("Relationships").strong().size(15.0));
     ui.add_space(6.0);
     super::link::render(ui, modal, view, &mut out.events, &mut out.navigate);
+}
 
-    ui.add_space(14.0);
-    ui.separator();
-    ui.add_space(6.0);
+/// The notes section (header + list + entry). `limit` caps how many recent notes show —
+/// the modal passes `Some(2)`, the full page passes `None` for the complete list.
+fn notes_section(
+    ui: &mut egui::Ui,
+    modal: &mut TicketModal,
+    out: &mut Outcome,
+    limit: Option<usize>,
+) {
+    let ticket_id = modal.ticket_id;
     ui.label(egui::RichText::new("Notes").strong().size(15.0));
     ui.add_space(6.0);
-    note::render_section(ui, modal, ticket_id, &mut out.events);
+    note::render_section(ui, modal, ticket_id, &mut out.events, limit);
 }
 
 /// Combo box to move a ticket to a different stage.

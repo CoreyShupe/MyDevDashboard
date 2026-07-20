@@ -9,11 +9,16 @@ use crate::ui::theme;
 use super::detail::TicketModal;
 
 /// Render the notes list and the "add note" input. Collects intent into `events`.
+///
+/// `limit` caps how many of the most-recent notes are shown (the compact modal passes
+/// `Some(2)`); when notes are hidden a muted line reports how many. `None` shows them all
+/// (the full-page detail, where notes get their own wide column).
 pub(super) fn render_section(
     ui: &mut egui::Ui,
     modal: &mut TicketModal,
     ticket_id: Uuid,
     events: &mut Vec<Event>,
+    limit: Option<usize>,
 ) {
     let muted = theme::palette().muted;
 
@@ -22,25 +27,40 @@ pub(super) fn render_section(
     } else if modal.notes.is_empty() {
         ui.label(egui::RichText::new("No notes yet.").color(muted));
     } else {
-        egui::ScrollArea::vertical()
-            .id_salt(("notes_scroll", ticket_id))
-            .max_height(180.0)
-            .show(ui, |ui| {
-                for note in &modal.notes {
-                    card::inset(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.label(&note.body);
-                        ui.label(
-                            egui::RichText::new(
-                                note.created_at.format("%Y-%m-%d %H:%M").to_string(),
-                            )
-                            .color(muted)
-                            .size(11.0),
-                        );
-                    });
-                    ui.add_space(6.0);
-                }
+        let total = modal.notes.len();
+        // Show only the last `limit` notes (most recent). Notes arrive oldest-first, so the
+        // tail is the newest slice.
+        let start = match limit {
+            Some(n) if total > n => total - n,
+            _ => 0,
+        };
+
+        if start > 0 {
+            let hidden = start;
+            ui.label(
+                egui::RichText::new(format!(
+                    "Showing the {} most recent — {hidden} earlier {} not shown. Expand to see all.",
+                    total - start,
+                    if hidden == 1 { "note" } else { "notes" },
+                ))
+                .color(muted)
+                .size(12.0),
+            );
+            ui.add_space(6.0);
+        }
+
+        for note in &modal.notes[start..] {
+            card::inset(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(&note.body);
+                ui.label(
+                    egui::RichText::new(note.created_at.format("%Y-%m-%d %H:%M").to_string())
+                        .color(muted)
+                        .size(11.0),
+                );
             });
+            ui.add_space(6.0);
+        }
     }
 
     ui.add_space(6.0);

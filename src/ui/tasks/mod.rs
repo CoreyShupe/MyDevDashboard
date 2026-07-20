@@ -50,7 +50,8 @@ impl BoardState {
     /// the full-page presentation over the modal. See `ui::dev`.
     pub fn dev_open(&mut self, ticket: &crate::domain::tasks::Ticket, expanded: bool) {
         let mut modal = TicketModal::new(ticket);
-        modal.notes_loaded = true; // show the empty-notes state, not "Loading…"
+        modal.notes = crate::ui::dev::mock_notes(ticket.id); // exercise the notes cap / wide list
+        modal.notes_loaded = true;
         modal.expanded = expanded;
         self.modal = Some(modal);
     }

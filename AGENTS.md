@@ -277,7 +277,10 @@ variant for a distinct cause.
 
 1. Before coding, confirm your change respects §2 (separation) and §3 (errors).
 2. If a rule doesn't fit, add a precise sub-rule to this file **before** proceeding.
-3. Run `cargo fmt` + `cargo clippy` + `cargo build` before considering work done. No tests (above).
+3. **`cargo clippy` is the primary check tool** — use it (not `cargo check`) to compile-
+   verify while iterating; it is pre-approved in `.claude/settings.json` so it runs without a
+   permission prompt. Run `cargo fmt` + `cargo clippy` + `cargo build` before considering work
+   done. No tests (above).
 4. When you add a crate, feature, table, error variant, or module, update this file and
    the `README.md` in the same change.
 5. Prefer small, obvious code over cleverness. This is a personal tool — clarity wins.
@@ -369,6 +372,34 @@ doesn't exist, extend `theme`/`components` in the same change (and update this s
 
 This is a GUI app; verify UI changes by looking at them, not by guessing.
 
+> **Always verify UI changes with a screenshot before reporting them done.** This is a
+> standing expectation, not an optional extra — after any change that affects what a screen
+> looks like, capture the relevant `DEV_VIEW` and actually look at the image. The capture
+> tooling below is pre-approved (`Bash(./dev-dash:*)` in `.claude/settings.json`), so it runs
+> without a permission prompt — there is no reason to skip it.
+
+### The one-liner: `dev-dash shot VIEW OUT`
+`dev-dash shot` encapsulates the whole build → launch → raise → capture → kill flow, so this
+is the primary way to get a screenshot. It's the trusted wrapper (see the `dev-dash` trust-
+boundary note in §6) — prefer it over hand-rolling the `screencapture` dance.
+
+```bash
+./dev-dash shot ticket tmp/screenshots/ticket.png   # VIEW = onboarding|board|ticket|page|error
+./dev-dash shot page   tmp/screenshots/page.png
+```
+
+Write shots into the in-project **`tmp/screenshots/`** folder (`tmp/` is the gitignored local
+scratch dir; the `screenshots/` subfolder is kept via `.gitkeep`, its contents ignored).
+Keeping them in-repo means you can open them in the IDE, not hunt through the system `/tmp`.
+Then Read the PNG to review it. Capture every view your change touches (e.g. both `ticket`
+and `page` for a detail-view change).
+
+> **Make the feature actually visible in the mock.** A screenshot only verifies what the
+> mock state exercises. If your change only shows up with certain data (e.g. the notes cap
+> needs >2 notes, an overflow needs a long string), enrich `ui/dev.rs` so the mock produces
+> it — e.g. `mock_notes()` returns 5 notes so the modal's 2-note cap and "N earlier notes"
+> line both render. An empty mock that hides the feature is a failed verification.
+
 ### Jump straight to a screen — `DEV_VIEW`
 `ui/dev.rs` injects MOCK in-memory state (no DB, no data entry, no seeding) so any screen
 renders instantly. Set the env var when launching:
@@ -406,4 +437,6 @@ Notes: `timeout` isn't on macOS — bound a foreground run with
 ---
 
 _Last updated as part of: initial scaffold + onboarding/profile + Tasks board (feature-sliced,
-composed of parts; no seeding; no unit tests) + design system (theme + component kit)._
+composed of parts; no seeding; no unit tests) + design system (theme + component kit) +
+ticket detail split (two-column page / capped modal notes) + handle-only card drag; clippy as
+primary check; mandatory screenshot verification via `dev-dash shot`._
