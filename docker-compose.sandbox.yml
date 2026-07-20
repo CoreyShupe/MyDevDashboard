@@ -1,0 +1,37 @@
+# Isolated SANDBOX PostgreSQL — for verifying migrations WITHOUT touching production data.
+#
+# A completely separate stack from production (`docker-compose.yml`): its own compose project
+# (`devdash-sandbox`), container (`devdash-sandbox-postgres`), volume (`devdash-sandbox-pgdata`),
+# and host port (5434, vs production's 5433). None of those names or ports overlap the
+# `my-dev-dash*` production stack, so this can never collide with or clobber the owner's real
+# database (AGENTS.md §12).
+#
+# Config comes from `.env.sandbox` (passed via `--env-file` by the scripts). The data volume is
+# THROWAWAY (not `external`) — `dev-dash sandbox reset` wipes it freely. Drive it with
+# `dev-dash sandbox {up|down|reset|psql|migrate}` (or `scripts/sandbox-db.sh`).
+name: devdash-sandbox
+
+services:
+  postgres:
+    image: postgres:18
+    container_name: devdash-sandbox-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-devdash}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devdash}
+      POSTGRES_DB: ${POSTGRES_DB:-devdash}
+    ports:
+      # Host 5434 (sandbox) → container 5432. Production is on 5433; these never overlap.
+      - "${POSTGRES_PORT:-5434}:5432"
+    volumes:
+      - sandbox-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-devdash} -d ${POSTGRES_DB:-devdash}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  # A plain named volume (NOT external) — freely created and wiped by the sandbox scripts.
+  sandbox-pgdata:
+    name: devdash-sandbox-pgdata

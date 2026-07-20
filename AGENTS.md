@@ -644,3 +644,47 @@ tables + inline thumbnails); regenerate/extend it alongside the images.
 
 Then **Read the PNG** to confirm it rendered what you intended (§8) before reporting done. The
 canonical list of every view lives in the §8 table; this gallery must mirror it exactly.
+
+---
+
+## 12. Production data & migrations (this is the owner's live utility)
+
+> **This app now holds the owner's REAL, general-purpose data.** A careless migration can
+> destroy or orphan it. Treat every schema change as production-affecting.
+
+**Destructive migrations need sign-off — ask FIRST.** Any migration that *may* cause data loss
+or make data inaccessible must be **discussed with the owner before you write or apply it**.
+Non-exhaustive "must ask" list:
+- `DROP TABLE` / `DROP COLUMN`, or renaming a table/column (a rename is a drop+add to old code);
+- a type change that can't round-trip the existing values;
+- `ADD COLUMN … NOT NULL` without a `DEFAULT` on a populated table;
+- destructive data backfills / `UPDATE`/`DELETE` in a migration;
+- removing or renaming anything the app still reads.
+
+**Additive migrations are fine to add + verify without asking** — a new table, a new column with
+a default (or nullable), a new index. When in doubt, ask.
+
+**Verify against the SANDBOX, never production.** There are two totally separate DB stacks:
+
+| | Production (the owner's data) | Sandbox (yours, for verification) |
+|---|---|---|
+| Compose | `docker-compose.yml` | `docker-compose.sandbox.yml` |
+| Env | `.env` (owner's, git-ignored) | `.env.sandbox` |
+| Project / container / volume | `my-dev-dash*` | `devdash-sandbox*` |
+| Host port | 5433 | **5434** |
+| Driven by | `dev-dash db …` (**DENIED** to agents) | `dev-dash sandbox …` |
+
+- **Never touch the production stack.** Do not run `dev-dash db …`, do not `dev-dash open`
+  (both hit the real DB — they're denied in `.claude/settings.json`), and never rename/edit
+  `docker-compose.yml`, `scripts/_common.sh`, or `scripts/db-*.sh` (renaming would orphan the
+  owner's `my-dev-dash-pgdata` volume → data looks lost).
+- **Verify with `dev-dash sandbox migrate`.** It brings up the sandbox (5434), builds, and runs
+  the app's real migration path headlessly via the `DEVDASH_MIGRATE_CHECK` gate in `main.rs`
+  (connect → migrate → log → exit, no window). Confirm the log's `target` is `localhost:5434`.
+  Other subcommands: `dev-dash sandbox {up|down|reset|psql|url}`. The sandbox script hard-refuses
+  any `DATABASE_URL` that doesn't target the sandbox port.
+- Screenshots (`dev-dash shot`) use DEV_VIEW mocks and touch **no** database — safe anytime.
+
+**Agent permissions** (`.claude/settings.json`) enforce this: only `dev-dash build|shot|snap|
+sandbox` and `cargo fmt|clippy` are allowed; `dev-dash db` and `dev-dash open` are denied. Drive
+the sandbox through `dev-dash sandbox`, not the raw `scripts/sandbox-db.sh`.

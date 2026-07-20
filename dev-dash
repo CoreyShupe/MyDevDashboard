@@ -11,6 +11,8 @@
 #     dev-dash db down          Stop it (data preserved).
 #     dev-dash db reset         DESTROY the volume + all data (confirmation-gated).
 #     dev-dash db psql          Open a psql shell against the running DB.
+#     dev-dash sandbox CMD      Isolated SANDBOX db for migration checks — never touches prod.
+#                               CMD = up|down|reset|psql|migrate|url (port 5434). See AGENTS §12.
 #     dev-dash open [dev]       Launch the app DETACHED and exit 0.
 #                               default = prod (release build, then run the binary);
 #                               `dev`   = `cargo run` (debug).
@@ -40,7 +42,7 @@ cd "$SCRIPT_DIR"
 
 usage() {
   # Print the command reference from this file's header comment.
-  sed -n '3,26p' "$SOURCE"
+  sed -n '3,28p' "$SOURCE"
   exit "${1:-0}"
 }
 
@@ -62,6 +64,13 @@ case "$cmd" in
       psql)  exec ./scripts/db-psql.sh ;;
       *)     echo "error: unknown 'db' subcommand '${2:-}'" >&2; usage 1 ;;
     esac
+    ;;
+
+  sandbox)
+    # Isolated sandbox DB for verifying migrations (AGENTS.md §12) — fully separate from the
+    # production `db` stack. Forwards the subcommand (up|down|reset|psql|migrate|url).
+    shift
+    exec ./scripts/sandbox-db.sh "$@"
     ;;
 
   open)

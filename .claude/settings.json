@@ -3,7 +3,14 @@
     "allow": [
       "Bash(cargo clippy:*)",
       "Bash(cargo fmt:*)",
-      "Bash(./dev-dash:*)"
+      "Bash(./dev-dash build:*)",
+      "Bash(./dev-dash shot:*)",
+      "Bash(./dev-dash snap:*)",
+      "Bash(./dev-dash sandbox:*)"
+    ],
+    "deny": [
+      "Bash(./dev-dash db:*)",
+      "Bash(./dev-dash open:*)"
     ],
     "ask": [
       "Edit(dev-dash)",

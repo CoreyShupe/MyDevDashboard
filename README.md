@@ -144,6 +144,27 @@ The **Restart** button (nav footer, under Refresh) exits with a sentinel code th
 `./dev-dash open` catches to rebuild and relaunch (prod) or re-run (dev) — handy for picking up
 code changes without leaving the app.
 
+### Sandbox database & migrations
+
+Because this holds real data, migrations are verified against an **isolated sandbox** database —
+never your production one. The sandbox is a fully separate Docker stack
+([`docker-compose.sandbox.yml`](docker-compose.sandbox.yml) + [`.env.sandbox`](.env.sandbox)):
+its own project/container/volume and **host port 5434** (production stays on 5433), so it can't
+collide with or touch your data.
+
+```bash
+dev-dash sandbox up        # start the sandbox DB (port 5434)
+dev-dash sandbox migrate   # build + apply migrations headlessly against the sandbox, then exit
+dev-dash sandbox psql      # psql shell into the sandbox
+dev-dash sandbox reset     # wipe + recreate the sandbox (throwaway)
+dev-dash sandbox down      # stop it
+```
+
+`dev-dash sandbox migrate` runs the app's real migration path (via the `DEVDASH_MIGRATE_CHECK`
+env gate in `main.rs`) — connect, migrate, log, exit — with no window. See
+[AGENTS.md](AGENTS.md) §12 for the full data-safety rules (destructive migrations require
+explicit sign-off; agents may not run `dev-dash db …` against production).
+
 ## Troubleshooting
 
 - **"cannot reach PostgreSQL …"** on startup — the DB isn't running. Run `./scripts/db-up.sh`.

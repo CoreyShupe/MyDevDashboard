@@ -46,6 +46,14 @@ fn main() -> eframe::Result<()> {
         }
     };
 
+    // Headless migration check (AGENTS.md §12): connect to `DATABASE_URL`, apply migrations,
+    // log the outcome, and EXIT — no window. Gated by `DEVDASH_MIGRATE_CHECK`, so a normal run
+    // is unaffected. `scripts/sandbox-db.sh migrate` uses this to verify migrations against the
+    // isolated sandbox DB (never production).
+    if std::env::var_os("DEVDASH_MIGRATE_CHECK").is_some() {
+        migrate_check(config);
+    }
+
     // The tokio runtime hosts the background worker. It must outlive the UI event loop,
     // so it is kept alive in this scope for the duration of `run_native`.
     let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -90,6 +98,33 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(DashboardApp::new(bridge)))
         }),
     )
+}
+
+/// Apply migrations against `DATABASE_URL` headlessly, then exit — the `DEVDASH_MIGRATE_CHECK`
+/// path (AGENTS.md §12). Exits 0 on success, 1 if config is missing or migration fails. Never
+/// opens a window. Uses its own single-thread runtime so it doesn't depend on the GUI runtime.
+fn migrate_check(config: Option<Config>) -> ! {
+    let Some(config) = config else {
+        error!("migrate-check: no valid configuration (check DATABASE_URL); aborting");
+        std::process::exit(1);
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime for migrate-check");
+    let code = runtime.block_on(async {
+        match system::db::connect_and_migrate(&config).await {
+            Ok(_) => {
+                info!(target = %config.redacted_target(), "migrate-check: migrations applied cleanly");
+                0
+            }
+            Err(e) => {
+                error!(error = %e, "migrate-check: FAILED");
+                1
+            }
+        }
+    });
+    std::process::exit(code);
 }
 
 fn init_tracing() {
