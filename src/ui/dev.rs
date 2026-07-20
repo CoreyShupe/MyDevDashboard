@@ -9,11 +9,12 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::app::projects::ProjectCard;
-use crate::app::{ViewData, notes, profile, projects, tasks};
+use crate::app::{ViewData, notes, profile, projects, tasks, todos};
 use crate::domain::notes::Note as UncategorizedNote;
 use crate::domain::profile::Profile;
 use crate::domain::projects::{GitStatus, Project, Worktree};
 use crate::domain::tasks::{Note, Stage, Ticket};
+use crate::domain::todos::Todo;
 use crate::error::UserFacingError;
 
 /// Which screen to force. Selected via `DEV_VIEW={onboarding|board|ticket|page|error}`.
@@ -39,6 +40,8 @@ pub enum DevView {
     Projects,
     /// A single project's full-page detail (metadata + worktrees).
     Project,
+    /// The Todos tab: quick tasks, one already checked off.
+    Todos,
     Error,
 }
 
@@ -57,6 +60,7 @@ impl DevView {
             "notes-file" => Some(Self::NotesFile),
             "projects" => Some(Self::Projects),
             "project" => Some(Self::Project),
+            "todos" => Some(Self::Todos),
             "error" => Some(Self::Error),
             _ => None,
         }
@@ -235,6 +239,19 @@ pub fn mock_board() -> ViewData {
         ),
     ];
 
+    // A handful of todos, one already checked off, so the Todos tab renders both states.
+    let todo = |body: &str, done: bool| Todo {
+        id: Uuid::new_v4(),
+        body: body.to_owned(),
+        done,
+        created_at: now,
+    };
+    let todos = vec![
+        todo("Reply to the design-review thread", false),
+        todo("Bump the staging deploy after lunch", false),
+        todo("Renew the TLS cert before it expires", true),
+    ];
+
     ViewData {
         profile,
         tasks: tasks::View { stages, tickets },
@@ -243,6 +260,7 @@ pub fn mock_board() -> ViewData {
             projects: projects_cards,
             worktrees,
         },
+        todos: todos::View { todos },
     }
 }
 

@@ -12,6 +12,7 @@ mod notes;
 mod profile;
 mod projects;
 mod tasks;
+mod todos;
 
 use std::rc::Rc;
 
@@ -28,6 +29,7 @@ pub enum Tab {
     Tasks,
     Notes,
     Projects,
+    Todos,
 }
 
 /// The eframe application shell. Owns UI state only; system state lives behind the `Bridge`.
@@ -41,6 +43,7 @@ pub struct DashboardApp {
     board: tasks::BoardState,
     notes: notes::NotesState,
     projects: projects::ProjectsState,
+    todos: todos::TodosState,
 
     // Shell-level overlay.
     error: Option<UserFacingError>,
@@ -67,6 +70,7 @@ impl DashboardApp {
             board: tasks::BoardState::default(),
             notes: notes::NotesState::default(),
             projects: projects::ProjectsState::default(),
+            todos: todos::TodosState::default(),
             error: None,
             new_profile_flow: false,
             active_profile_id: None,
@@ -131,6 +135,10 @@ impl DashboardApp {
                 self.data = Rc::new(data);
                 self.active_tab = Tab::Projects;
             }
+            dev::DevView::Todos => {
+                self.data = Rc::new(dev::mock_board());
+                self.active_tab = Tab::Todos;
+            }
         }
         tracing::warn!(
             ?view,
@@ -170,6 +178,7 @@ impl DashboardApp {
                         self.board = tasks::BoardState::default();
                         self.notes = notes::NotesState::default();
                         self.projects = projects::ProjectsState::default();
+                        self.todos = todos::TodosState::default();
                         self.active_profile_id = active;
                     }
                     // Let the board / projects close a modal or detail whose entity vanished.
@@ -217,6 +226,7 @@ impl DashboardApp {
                 // Nav tabs. Add a tab per feature as they land.
                 self.nav_item(ui, Tab::Tasks, &format!("{} Tasks", theme::icon::DASHBOARD));
                 self.nav_item(ui, Tab::Notes, &format!("{} Notes", theme::icon::NOTES));
+                self.nav_item(ui, Tab::Todos, &format!("{} Todos", theme::icon::TODOS));
                 self.nav_item(
                     ui,
                     Tab::Projects,
@@ -265,6 +275,7 @@ impl DashboardApp {
                     self.projects
                         .render_workspace(ui, &self.bridge, &data.projects, &data.tasks)
                 }
+                Tab::Todos => self.todos.render_workspace(ui, &self.bridge, &data.todos),
             });
     }
 

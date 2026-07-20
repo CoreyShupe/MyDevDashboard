@@ -29,8 +29,8 @@ cargo run
 ```
 
 On first launch you'll land on the onboarding screen to create your first **profile**. Then
-you'll drop into the dashboard with a left side-nav (**Tasks**, **Notes**, **Projects**) and an
-empty workspace.
+you'll drop into the dashboard with a left side-nav (**Tasks**, **Notes**, **Todos**,
+**Projects**) and an empty workspace.
 
 - **Profiles** — self-contained workspaces you switch between from the switcher at the top of
   the nav. Each profile has its **own** stages, tickets, and notes — they never mix. "New
@@ -42,8 +42,12 @@ empty workspace.
   from the Notes "Add to ticket" picker.
 - **Notes** — a fast, list-like scratchpad for *uncategorized* notes. Jot a note at the top
   (Enter or **Add**), then file it later: **Create Ticket** turns a note into a new ticket
-  (pre-filled as its first note), or **Add To Ticket** searches your tickets by title and
-  attaches the note to the one you pick. Filing a note removes it from the list.
+  (pre-filled as its first note), **Make Todo** turns it into a quick todo, or **Add To Ticket**
+  searches your tickets by title and attaches the note to the one you pick. Filing a note removes
+  it from the list.
+- **Todos** — a fast, list-like scratchpad for quick tasks you just need to remember, without
+  the ceremony of a ticket. Jot one at the top (Enter or **Add**); check its box to complete it
+  (**completed todos are hidden**), or delete it. Works just like Notes.
 - **Projects** — local repositories you already have on disk (this never clones — you paste a
   path). Each project is a card showing its name, origin URL, path, current branch, a live
   up-to-date badge, and its worktree count. Open a project for a full page with its metadata and
@@ -106,7 +110,7 @@ src/
   main.rs      Boot sequence: config -> tokio worker -> egui.
   error.rs     All typed errors (thiserror). See AGENTS.md §3.
   config.rs    Env/config loading.
-  domain/      Pure data types (Profile, Stage, Ticket, Note, uncategorized Note, Project, Worktree).
+  domain/      Pure data types (Profile, Stage, Ticket, Note, uncategorized Note, Project, Worktree, Todo).
   system/      DB pool + services (business logic). No UI here.
   app/         The bridge: events, view-model, tokio worker.
   ui/          Pure egui rendering. No DB here.

@@ -92,7 +92,7 @@ impl NotesState {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for note in &view.notes {
-                    self.render_note_row(ui, note, &mut outcome);
+                    self.render_note_row(ui, bridge, note, &mut outcome);
                     ui.add_space(10.0);
                 }
             });
@@ -124,24 +124,32 @@ impl NotesState {
         });
     }
 
-    /// A single note row: wrapped body (roomy) on the left, stacked actions on the right.
-    fn render_note_row(&mut self, ui: &mut egui::Ui, note: &Note, outcome: &mut NotesOutcome) {
+    /// A single note row: wrapped body (roomy) on the left, then a dedicated **Make Todo**
+    /// column, then the two ticket actions pinned to the right edge.
+    fn render_note_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        bridge: &Bridge,
+        note: &Note,
+        outcome: &mut NotesOutcome,
+    ) {
         let muted = theme::palette().muted;
 
         card::card(ui, |ui| {
             ui.set_width(ui.available_width());
-            // Rows are intentionally taller than the composer so there's room to write, with
-            // both actions sitting side by side on the right.
+            // Rows are intentionally taller than the composer so there's room to write, with the
+            // actions sitting on the right.
             const ROW_MIN_H: f32 = 72.0;
+            const TODO_W: f32 = 130.0; // the standalone "Make Todo" column
             const ACTIONS_W: f32 = 290.0; // fits "Create Ticket" + "Add To Ticket" side by side
             const GAP: f32 = 14.0;
 
             ui.horizontal_top(|ui| {
                 // Zero the row's horizontal item-spacing so the columns sum to EXACTLY the card
-                // width (text + GAP + actions). egui's default 8px between them would make each
-                // row overflow its card, and that overflow compounds down the list.
+                // width (text + GAP + todo + GAP + actions). egui's default 8px between them
+                // would make each row overflow its card, and that overflow compounds down the list.
                 ui.spacing_mut().item_spacing.x = 0.0;
-                let text_w = (ui.available_width() - ACTIONS_W - GAP).max(160.0);
+                let text_w = (ui.available_width() - TODO_W - ACTIONS_W - GAP * 2.0).max(160.0);
 
                 // Left: the note body (wrapped) + a subtle timestamp. `set_min_width` keeps the
                 // column full-width even for short notes, so the actions stay pinned right.
@@ -164,7 +172,25 @@ impl NotesState {
 
                 ui.add_space(GAP);
 
-                // Right: the two actions side by side, hugging the card's right edge
+                // Middle: the standalone "Make Todo" action in its own column. Turning a note
+                // into a todo needs no further input, so it fires immediately (add todo + drop
+                // the note) — unlike the ticket actions, which open a modal/picker.
+                ui.allocate_ui_with_layout(
+                    egui::vec2(TODO_W, ROW_MIN_H),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_min_width(TODO_W);
+                        if button::secondary(ui, &format!("{} Make Todo", theme::icon::TODOS))
+                            .clicked()
+                        {
+                            bridge.send(Event::file_into_todo(note.id, note.body.clone()));
+                        }
+                    },
+                );
+
+                ui.add_space(GAP);
+
+                // Right: the two ticket actions side by side, hugging the card's right edge
                 // (right-to-left, so the first added button is the rightmost).
                 ui.allocate_ui_with_layout(
                     egui::vec2(ACTIONS_W, ROW_MIN_H),

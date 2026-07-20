@@ -11,6 +11,7 @@ pub mod profile;
 pub mod projects;
 pub mod state;
 pub mod tasks;
+pub mod todos;
 pub mod worker;
 
 pub use bridge::{Bridge, repainter_from_ctx};

@@ -33,6 +33,9 @@ pub enum Event {
         ticket_id: Uuid,
         body: String,
     },
+    /// Turn a note into a TODO: add it to the todos list, then drop the uncategorized note.
+    /// Cross-feature (touches `todos`), same shape as `FileIntoTicket`.
+    FileIntoTodo { id: Uuid, body: String },
 }
 
 impl Event {
@@ -48,6 +51,9 @@ impl Event {
             ticket_id,
             body,
         }
+    }
+    pub fn file_into_todo(id: Uuid, body: String) -> Self {
+        Self::FileIntoTodo { id, body }
     }
 }
 
@@ -88,6 +94,7 @@ pub async fn handle(backend: &Backend, emitter: &Emitter, event: Event) {
             ticket_id,
             body,
         } => file_into_ticket(backend, id, ticket_id, &body).await,
+        Event::FileIntoTodo { id, body } => file_into_todo(backend, id, &body).await,
     };
     emitter.settle(backend, result).await;
 }
@@ -102,5 +109,13 @@ async fn file_into_ticket(
     body: &str,
 ) -> Result<(), AppError> {
     backend.tasks.note.add(ticket_id, body).await?;
+    backend.notes.delete(id).await
+}
+
+/// Turn a note into a todo in the active profile, then remove the source note. The todo is
+/// created first so a failure there leaves the note in place (nothing is silently lost).
+async fn file_into_todo(backend: &Backend, id: Uuid, body: &str) -> Result<(), AppError> {
+    let profile_id = crate::app::profile::active_id(backend).await?;
+    backend.todos.add(profile_id, body).await?;
     backend.notes.delete(id).await
 }
