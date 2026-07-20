@@ -65,6 +65,7 @@ pub mod icon {
     pub const REFRESH: char = '\u{e5d5}'; // refresh
     pub const CLOSE: char = '\u{e5cd}'; // close
     pub const DASHBOARD: char = '\u{e871}'; // dashboard (nav: Tasks)
+    pub const NOTES: char = '\u{e873}'; // description (nav: Notes)
     pub const SAVE: char = '\u{e161}'; // save
     pub const WARNING: char = '\u{e002}'; // warning
     pub const DRAG: char = '\u{e945}'; // drag_indicator (6-dot ticket drag handle)

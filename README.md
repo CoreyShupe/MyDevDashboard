@@ -29,7 +29,15 @@ cargo run
 ```
 
 On first launch you'll land on the **Setup Profile** onboarding screen. Enter your name
-and you'll drop into the dashboard with a left side-nav (**Tasks**) and an empty workspace.
+and you'll drop into the dashboard with a left side-nav (**Tasks**, **Notes**) and an empty
+workspace.
+
+- **Tasks** — a configurable, Jira-like board of stages and tickets (with notes and
+  parent/child relationships).
+- **Notes** — a fast, list-like scratchpad for *uncategorized* notes. Jot a note at the top
+  (Enter or **Add**), then file it later: **Create Ticket** turns a note into a new ticket
+  (pre-filled as its first note), or **Add To Ticket** searches your tickets by title and
+  attaches the note to the one you pick. Filing a note removes it from the list.
 
 ---
 
@@ -82,7 +90,7 @@ src/
   main.rs      Boot sequence: config -> tokio worker -> egui.
   error.rs     All typed errors (thiserror). See AGENTS.md §3.
   config.rs    Env/config loading.
-  domain/      Pure data types (Profile, Stage, Ticket, Note).
+  domain/      Pure data types (Profile, Stage, Ticket, Note, uncategorized Note).
   system/      DB pool + services (business logic). No UI here.
   app/         The bridge: events, view-model, tokio worker.
   ui/          Pure egui rendering. No DB here.

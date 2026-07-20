@@ -2,5 +2,6 @@
 //!
 //! Each feature owns a folder here mirroring `system/`, `app/`, and `ui/` (AGENTS.md §2).
 
+pub mod notes;
 pub mod profile;
 pub mod tasks;

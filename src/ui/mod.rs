@@ -8,6 +8,7 @@ pub mod components;
 pub mod theme;
 
 mod dev;
+mod notes;
 mod profile;
 mod tasks;
 
@@ -22,6 +23,7 @@ use components::button;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Tasks,
+    Notes,
 }
 
 /// The eframe application shell. Owns UI state only; system state lives behind the `Bridge`.
@@ -33,6 +35,7 @@ pub struct DashboardApp {
     // Per-feature UI state.
     onboarding: profile::OnboardingState,
     board: tasks::BoardState,
+    notes: notes::NotesState,
 
     // Shell-level overlay.
     error: Option<UserFacingError>,
@@ -50,6 +53,7 @@ impl DashboardApp {
             active_tab: Tab::Tasks,
             onboarding: profile::OnboardingState::default(),
             board: tasks::BoardState::default(),
+            notes: notes::NotesState::default(),
             error: None,
             dev_mode: false,
         };
@@ -76,6 +80,18 @@ impl DashboardApp {
                 self.data = Rc::new(data);
             }
             dev::DevView::Error => self.error = Some(dev::mock_error()),
+            dev::DevView::Notes => {
+                self.data = Rc::new(dev::mock_notes_view());
+                self.active_tab = Tab::Notes;
+            }
+            dev::DevView::NotesFile => {
+                let data = dev::mock_notes_view();
+                if let Some(note) = data.notes.notes.first() {
+                    self.notes.dev_open_add_to_ticket(note);
+                }
+                self.data = Rc::new(data);
+                self.active_tab = Tab::Notes;
+            }
         }
         tracing::warn!(
             ?view,
@@ -146,6 +162,7 @@ impl DashboardApp {
 
                 // Nav tabs. Add a tab per feature as they land.
                 self.nav_item(ui, Tab::Tasks, &format!("{} Tasks", theme::icon::DASHBOARD));
+                self.nav_item(ui, Tab::Notes, &format!("{} Notes", theme::icon::NOTES));
 
                 // Footer: manual refresh (re-pulls state from the database).
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
@@ -166,6 +183,16 @@ impl DashboardApp {
             )
             .show(ui, |ui| match self.active_tab {
                 Tab::Tasks => self.board.render_workspace(ui, &self.bridge, &data.tasks),
+                Tab::Notes => {
+                    let outcome = self.notes.render_workspace(ui, &self.bridge, &data.notes);
+                    // "Create Ticket" from a note drives the board's create modal, so the
+                    // shell coordinates it across features (AGENTS.md §2). The modal renders
+                    // as an overlay, so it appears over the Notes tab without switching tabs.
+                    if let Some((note_id, body)) = outcome.create_ticket_from {
+                        self.board
+                            .open_new_ticket_from_note(note_id, body, &data.tasks);
+                    }
+                }
             });
     }
 
@@ -271,7 +298,9 @@ impl eframe::App for DashboardApp {
 
         // Overlays render last so they sit on top of whatever is behind them.
         self.board.render_overlays(&ctx, &self.bridge, &data.tasks);
-        self.board.render_create_modal(&ctx, &self.bridge);
+        self.board
+            .render_create_modal(&ctx, &self.bridge, &data.tasks);
+        self.notes.render_overlays(&ctx, &self.bridge, &data.tasks);
         self.render_error_modal(&ctx);
     }
 }

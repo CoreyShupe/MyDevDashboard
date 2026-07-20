@@ -8,7 +8,8 @@
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::app::{ViewData, profile, tasks};
+use crate::app::{ViewData, notes, profile, tasks};
+use crate::domain::notes::Note as UncategorizedNote;
 use crate::domain::profile::Profile;
 use crate::domain::tasks::{Note, Stage, Ticket};
 use crate::error::UserFacingError;
@@ -24,6 +25,10 @@ pub enum DevView {
     Page,
     /// The "new ticket" create modal, open over the board.
     Create,
+    /// The Notes tab, populated with uncategorized notes.
+    Notes,
+    /// The Notes tab with the "Add to ticket" search picker open.
+    NotesFile,
     Error,
 }
 
@@ -36,6 +41,8 @@ impl DevView {
             "ticket" => Some(Self::Ticket),
             "page" => Some(Self::Page),
             "create" => Some(Self::Create),
+            "notes" => Some(Self::Notes),
+            "notes-file" => Some(Self::NotesFile),
             "error" => Some(Self::Error),
             _ => None,
         }
@@ -107,7 +114,44 @@ pub fn mock_board() -> ViewData {
     ViewData {
         profile,
         tasks: tasks::View { stages, tickets },
+        notes: notes::View::default(),
     }
+}
+
+/// The Notes tab, populated. Reuses the mock board (so the "Create Ticket" stage picker and
+/// "Add To Ticket" search have real stages/tickets to work with) and layers uncategorized
+/// notes on top — including one long note so the row wrapping / extra height is exercised
+/// (AGENTS.md §8).
+pub fn mock_notes_view() -> ViewData {
+    let mut data = mock_board();
+    data.notes = notes::View {
+        notes: mock_uncategorized_notes(),
+    };
+    data
+}
+
+/// A handful of uncategorized notes, newest first (matching the real listing order). One is
+/// deliberately long to show the wrapped, taller row.
+pub fn mock_uncategorized_notes() -> Vec<UncategorizedNote> {
+    let now = Utc::now();
+    let bodies = [
+        "Look into the flaky drag-and-drop test on CI — seems timing dependent.",
+        "Ask design whether the teal accent should get a lighter tint for hover states.",
+        "Longer thought: the notes tab could eventually grow tags and a pinned section, and \
+         these two row actions (Create Ticket / Add To Ticket) will likely become a small \
+         menu once there are more ways to file a note. Keep the row layout flexible for now.",
+        "Remember to document the DEV_VIEW=notes screen in AGENTS.md §8.",
+    ];
+    bodies
+        .iter()
+        .enumerate()
+        .map(|(i, body)| UncategorizedNote {
+            id: Uuid::new_v4(),
+            body: (*body).to_owned(),
+            // Space them apart so the newest sits on top with plausible timestamps.
+            created_at: now - chrono::Duration::minutes((i as i64) * 37),
+        })
+        .collect()
 }
 
 /// Mock notes for a ticket detail screen — enough (5) that the modal's 2-note cap kicks in

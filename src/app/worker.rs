@@ -14,7 +14,7 @@ use crate::system::{Backend, db};
 
 use super::bridge::Emitter;
 use super::event::UiEvent;
-use super::{profile, tasks};
+use super::{notes, profile, tasks};
 
 pub struct Worker {
     config: Config,
@@ -76,6 +76,7 @@ impl Worker {
             UiEvent::ReloadAll => self.emitter.snapshot(&backend).await,
             UiEvent::Profile(event) => profile::handle(&backend, &self.emitter, event).await,
             UiEvent::Tasks(event) => tasks::handle(&backend, &self.emitter, event).await,
+            UiEvent::Notes(event) => notes::handle(&backend, &self.emitter, event).await,
         }
     }
 }

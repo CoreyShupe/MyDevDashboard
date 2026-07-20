@@ -6,6 +6,7 @@
 
 pub mod bridge;
 pub mod event;
+pub mod notes;
 pub mod profile;
 pub mod state;
 pub mod tasks;

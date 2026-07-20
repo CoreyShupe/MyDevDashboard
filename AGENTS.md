@@ -89,13 +89,15 @@ src/
 ├── domain/              Pure data types. No I/O. Serde-able. One folder per feature.
 │   ├── mod.rs
 │   ├── profile/         Profile.
-│   └── tasks/           mod.rs + parts: stage.rs (Stage), ticket.rs (Ticket), note.rs (Note).
+│   ├── tasks/           mod.rs + parts: stage.rs (Stage), ticket.rs (Ticket), note.rs (Note).
+│   └── notes/           Note — an uncategorized (unfiled) note. Single concept, like profile.
 │
 ├── system/             "System functionality": DB + business logic. No egui, ever.
 │   ├── mod.rs               `Backend` = aggregate of every feature's service.
 │   ├── db.rs               Shared: pool creation + migrations.
 │   ├── profile/            ProfileService.
-│   └── tasks/              mod.rs `TasksService` = { stage, ticket, note } part-services.
+│   ├── tasks/              mod.rs `TasksService` = { stage, ticket, note } part-services.
+│   └── notes/              NotesService — CRUD for the `uncategorized_notes` table.
 │
 ├── app/                The BRIDGE + orchestration root. Root dispatch lives here.
 │   ├── mod.rs              Re-exports.
@@ -104,7 +106,8 @@ src/
 │   ├── state.rs            ROOT `ViewData` composed of each feature's `View`.
 │   ├── worker.rs           ROOT dispatcher: routes a UiEvent to the owning feature.
 │   ├── profile/            profile::{Event, View, handle()}  — the feature "sub-root".
-│   └── tasks/              mod.rs dispatches to parts: stage/ticket/note::{Command, handle()}.
+│   ├── tasks/              mod.rs dispatches to parts: stage/ticket/note::{Command, handle()}.
+│   └── notes/              notes::{Event, View, handle()}. `FileIntoTicket` reaches into tasks.
 │
 └── ui/                 PURE rendering. No DB. One folder per feature + the shell + kit.
     ├── mod.rs              `DashboardApp` (eframe): shell nav, workspace, error modal.
@@ -112,7 +115,8 @@ src/
     ├── components/         Shared component kit: input.rs, button.rs, card.rs (§7).
     ├── dev.rs              Dev-only `DEV_VIEW` screen overrides for visual review (§8).
     ├── profile/            Onboarding "setup profile" screen + its transient UI state.
-    └── tasks/              mod.rs board + part renderers: stage.rs, ticket.rs, note.rs, modal.rs.
+    ├── tasks/              mod.rs board + part renderers: stage.rs, ticket.rs, note.rs, modal.rs.
+    └── notes/              Notes tab: composer + note rows + the "Add to ticket" picker.
 ```
 (`assets/fonts/Nunito.ttf` — SIL OFL, embedded via `include_bytes!`. Not a crate.)
 
@@ -291,8 +295,9 @@ Because this is a GUI, verify UI changes by looking at the running app, not just
 
 - **Force a specific screen without a DB** via the `DEV_VIEW` env var (see `ui/dev.rs`);
   worker snapshots are ignored while it's set:
-  `DEV_VIEW={onboarding|board|ticket|page|create|error}` (`ticket` = detail modal, `page` =
-  the full-page detail, `create` = the new-ticket modal).
+  `DEV_VIEW={onboarding|board|ticket|page|create|notes|notes-file|error}` (`ticket` = detail
+  modal, `page` = the full-page detail, `create` = the new-ticket modal, `notes` = the Notes
+  tab, `notes-file` = the Notes tab with the "Add to ticket" picker open).
 - **Run the binary by ABSOLUTE path**, not `target/debug/…` relative — this shell's cwd
   drifts (e.g. after a `cd` for a file move), and a wrong relative path makes the launch fail
   silently, so you end up screenshotting whatever was already frontmost. If a capture shows
@@ -384,9 +389,15 @@ is the primary way to get a screenshot. It's the trusted wrapper (see the `dev-d
 boundary note in §6) — prefer it over hand-rolling the `screencapture` dance.
 
 ```bash
-./dev-dash shot ticket tmp/screenshots/ticket.png   # VIEW = onboarding|board|ticket|page|create|error
+./dev-dash shot ticket tmp/screenshots/ticket.png   # VIEW = onboarding|board|ticket|page|create|notes|notes-file|error
 ./dev-dash shot page   tmp/screenshots/page.png
 ```
+
+**Compile-verify with `./dev-dash build`, not a bare `cargo build`.** `./dev-dash build` is
+part of the same pre-approved wrapper (`Bash(./dev-dash:*)` in `.claude/settings.json`), so it
+runs without a permission prompt; `cargo build` is not allowlisted and will prompt. Use
+`cargo clippy` while iterating (it *is* allowlisted — see §6) and `./dev-dash build` for the
+build step.
 
 Write shots into the in-project **`tmp/screenshots/`** folder (`tmp/` is the gitignored local
 scratch dir; the `screenshots/` subfolder is kept via `.gitkeep`, its contents ignored).
@@ -409,6 +420,8 @@ DEV_VIEW=board      cargo run   # populated Tasks board
 DEV_VIEW=onboarding cargo run   # setup-profile screen
 DEV_VIEW=ticket     cargo run   # board with a ticket modal open
 DEV_VIEW=create     cargo run   # board with the new-ticket create modal open
+DEV_VIEW=notes      cargo run   # the Notes tab, populated
+DEV_VIEW=notes-file cargo run   # the Notes tab with the "Add to ticket" picker open
 DEV_VIEW=error      cargo run   # the error modal
 ```
 
@@ -440,5 +453,8 @@ Notes: `timeout` isn't on macOS — bound a foreground run with
 _Last updated as part of: initial scaffold + onboarding/profile + Tasks board (feature-sliced,
 composed of parts; no seeding; no unit tests) + design system (theme + component kit) +
 ticket detail split (two-column page / capped modal notes) + handle-only card drag + new-ticket
-modal (title/description/first note, replacing the inline form); clippy as primary check;
-mandatory screenshot verification via `dev-dash shot`._
+modal (now with a stage picker; title/description/first note, replacing the inline form) +
+Notes tab (uncategorized notes: quick capture, "Create Ticket" reusing the create modal, and
+"Add to ticket" search picker — a full feature slice + `uncategorized_notes` table); clippy as
+primary check; `./dev-dash build` for the build step; mandatory screenshot verification via
+`dev-dash shot`._

@@ -8,7 +8,7 @@
 use crate::error::UserFacingError;
 
 use super::state::ViewData;
-use super::{profile, tasks};
+use super::{notes, profile, tasks};
 
 /// Intent flowing UI -> worker. `ReloadAll` is global; the rest route to a feature.
 ///
@@ -19,6 +19,7 @@ pub enum UiEvent {
     ReloadAll,
     Profile(profile::Event),
     Tasks(tasks::Event),
+    Notes(notes::Event),
 }
 
 /// Results flowing worker -> UI.

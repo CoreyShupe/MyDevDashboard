@@ -4,11 +4,13 @@
 //! through the `app/` bridge. See AGENTS.md §2.
 
 pub mod db;
+pub mod notes;
 pub mod profile;
 pub mod tasks;
 
 use sqlx::postgres::PgPool;
 
+use notes::NotesService;
 use profile::ProfileService;
 use tasks::TasksService;
 
@@ -20,13 +22,15 @@ use tasks::TasksService;
 pub struct Backend {
     pub profile: ProfileService,
     pub tasks: TasksService,
+    pub notes: NotesService,
 }
 
 impl Backend {
     pub fn new(pool: PgPool) -> Self {
         Self {
             profile: ProfileService::new(pool.clone()),
-            tasks: TasksService::new(pool),
+            tasks: TasksService::new(pool.clone()),
+            notes: NotesService::new(pool),
         }
     }
 }
