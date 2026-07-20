@@ -33,6 +33,30 @@ pub enum Tab {
     Todos,
 }
 
+impl Tab {
+    /// The persisted `ProfileView` this tab records as the profile's "last viewed page" (§9).
+    fn as_view(self) -> crate::domain::profile::ProfileView {
+        use crate::domain::profile::ProfileView;
+        match self {
+            Tab::Tasks => ProfileView::Tasks,
+            Tab::Notes => ProfileView::Notes,
+            Tab::Projects => ProfileView::Projects,
+            Tab::Todos => ProfileView::Todos,
+        }
+    }
+
+    /// The tab to land on for a profile's persisted `ProfileView`.
+    fn from_view(view: crate::domain::profile::ProfileView) -> Self {
+        use crate::domain::profile::ProfileView;
+        match view {
+            ProfileView::Tasks => Tab::Tasks,
+            ProfileView::Notes => Tab::Notes,
+            ProfileView::Projects => Tab::Projects,
+            ProfileView::Todos => Tab::Todos,
+        }
+    }
+}
+
 /// The eframe application shell. Owns UI state only; system state lives behind the `Bridge`.
 pub struct DashboardApp {
     bridge: Bridge,
@@ -298,6 +322,15 @@ impl DashboardApp {
                         self.projects = projects::ProjectsState::default();
                         self.todos = todos::TodosState::default();
                         self.active_profile_id = active;
+                        // Land on the profile's last-viewed page (§9) — this fires on first load
+                        // (None -> Some) and on every profile switch. No active profile → the
+                        // default (Tasks) is irrelevant (onboarding/picker is shown instead).
+                        self.active_tab = data
+                            .profile
+                            .active
+                            .as_ref()
+                            .map(|p| Tab::from_view(p.last_view))
+                            .unwrap_or(Tab::Tasks);
                     }
                     // Let the board / projects close a modal or detail whose entity vanished.
                     self.board.reconcile(&data.tasks);
@@ -421,6 +454,10 @@ impl DashboardApp {
             .corner_radius(egui::CornerRadius::same(theme::radius::INPUT));
         if ui.add_sized([ui.available_width(), 36.0], button).clicked() {
             self.active_tab = tab;
+            // Remember this as the active profile's last-viewed page so a relaunch / profile
+            // switch lands back here (§9). Quiet write-through — no snapshot (see profile::handle).
+            self.bridge
+                .send(crate::app::profile::Event::set_last_view(tab.as_view()));
         }
     }
 

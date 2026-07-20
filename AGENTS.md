@@ -41,7 +41,8 @@ allowlisted (it will prompt) — use the wrapper.
 | Screenshot a mock screen | `./dev-dash shot VIEW static/tmp/screenshots/NAME.png` |
 | Screenshot the LIVE running app (owner's real data) | `./dev-dash snap [static/tmp/screenshots/live.png]` |
 | Launch the app detached (dev by default; `prod` for release + Restart relaunch) | `./dev-dash open [prod]` |
-| Build a double-clickable macOS `.app` (`copy` also installs to `/Applications`) | `./dev-dash bundle [copy]` |
+| Build a double-clickable macOS `.app` (`mac copy` also installs to `/Applications`) | `./dev-dash mac [bundle]` |
+| One-shot macOS setup: require Docker running → `db up` → build + install the `.app` | `./dev-dash bootstrap mac` |
 | Database up / down / wipe+restart / shell | `./dev-dash db up` · `db down` · `db reset` · `db psql` |
 
 `VIEW` ∈ `onboarding · new-profile · profile-select · board · board-empty · ticket · page ·
@@ -153,7 +154,7 @@ src/
 │
 ├── domain/              Pure data types. No I/O. Serde-able. One folder per feature.
 │   ├── mod.rs
-│   ├── profile/         Profile.
+│   ├── profile/         Profile (+ ProfileView — the persisted per-profile last-viewed page).
 │   ├── tasks/           mod.rs + parts: stage.rs (Stage), ticket.rs (Ticket), note.rs (Note).
 │   ├── notes/           Note — an uncategorized (unfiled) note. Single concept, like profile.
 │   ├── projects/        mod.rs + parts: project.rs (Project + GitStatus), worktree.rs (Worktree).
@@ -208,7 +209,7 @@ compose files), `static/scripts/` (the `db-*`/`sandbox-db` helpers + `window-id.
 screenshot window-id helper — §8, + `bundle-macos.sh` the macOS `.app` bundler & `icon-gen.sh` the
 icon generator — §14), `static/screenshots/` (the committed gallery, §11), and `static/tmp/`
 (gitignored scratch, §8). Build OUTPUT that is not a source input lives at the repo root under
-**`builds/`** (gitignored): `dev-dash bundle` writes `builds/macos/DevDashboard.app` there (§14).
+**`builds/`** (gitignored): `dev-dash mac bundle` writes `builds/macos/DevDashboard.app` there (§14).
 The `dev-dash` wrapper and the source `include_bytes!`/`sqlx::migrate!` paths point into `static/`;
 moving any of these means updating those references + `.claude/settings.json` in the same change.
 The project's Claude memory lives at **`.claude/CLAUDE.md`** (auto-loaded) and just imports this
@@ -434,11 +435,13 @@ constant. **The Restart button only exists in dev/debug builds** — it's gated 
 entirely, because a release/Finder launch has no relaunch loop to catch the exit code (§14).
 
 > **`dev-dash` is a trust boundary — do not edit it casually.** `.claude/settings.json`
-> allowlists `Bash(./dev-dash:*)` to run without prompting, and `dev-dash` internally runs
-> `swift`/`screencapture`/`pkill`/`perl` (none individually allowlisted). Because running it
-> is auto-approved, **editing it is deliberately gated**: the settings `ask` rules force a
-> confirmation prompt on `Edit(dev-dash)`/`Write(dev-dash)` even under auto-accept. Never remove
-> that guard or widen the allowlist to the underlying system tools to "simplify" things.
+> allowlists the safe read-only-ish subcommands (`build`/`shot`/`snap`/`sandbox`) to run without
+> prompting, and `dev-dash` internally runs `swift`/`screencapture`/`pkill`/`perl` (none
+> individually allowlisted); `db`/`open`/`bootstrap` are outright **denied** (they hit the prod DB,
+> §12). Because the allowlisted subcommands are auto-approved, **editing the wrapper is
+> deliberately gated**: the settings `ask` rules force a confirmation prompt on
+> `Edit(dev-dash)`/`Write(dev-dash)` even under auto-accept. Never remove that guard, widen the
+> allowlist to the underlying system tools, or allowlist a subcommand that reaches the prod DB.
 
 ---
 
@@ -459,7 +462,10 @@ entirely, because a release/Finder launch has no relaunch loop to catch the exit
 > exact grab point** — never re-centre it on the cursor. Use `dnd::drag_ghost` in the
 > `is_being_dragged` branch (tickets and stage columns both do). Payload types are per-feature
 > and DISTINCT so drop targets can tell them apart (tickets use `Uuid`; stage reorder uses a
-> `StageDrag` newtype).
+> `StageDrag` newtype). **What is grabbable differs by item:** a **ticket card is draggable in
+> its entirety** (one `click_and_drag` over the whole card — click opens the detail, drag
+> reorders; the 6-dot grip is now only a visual affordance), whereas a **stage column** is
+> dragged by its grip alone. Don't reintroduce a grip-only drag zone on tickets.
 
 ### Baked-in aesthetic decisions (do not fight these)
 - **Framework:** stay on `egui` — it themes fully. Do NOT add a UI framework or an egui
@@ -590,6 +596,18 @@ How it's enforced (keep new data consistent with this):
   none) so the UI never threads a profile id through events. `ViewData::load` scopes the board,
   notes, projects, and todos to `profile.active_id()`; a fresh snapshot after any change reloads
   the active profile's data.
+- **Last-viewed page is per profile.** `profiles.last_view` (TEXT, migration 0009, default
+  `'tasks'`) records which workspace page each profile was on, so **switching profiles or
+  relaunching restores where the owner left off** rather than always landing on Tasks. It maps to
+  the domain `ProfileView` enum (`Tasks`/`Notes`/`Todos`/`Projects`; `from_db` degrades any
+  unknown value to the default so a stray string never breaks nav), which the UI `Tab` converts
+  to/from. Writing it is a **quiet write-through**: clicking a nav tab sends
+  `profile::Event::set_last_view(view)` → `ProfileService::set_last_view`, which does an `UPDATE`
+  and **emits NO snapshot** (the UI already shows the tab — re-snapshotting every tab click would
+  needlessly reload the whole workspace). Reading it back: the shell sets `active_tab` from
+  `profile.active.last_view` on first load and on every profile switch (the same branch that
+  resets transient state). A freshly-created profile has `last_view = 'tasks'` (the `INSERT` omits
+  the column → DEFAULT), matching where onboarding drops you.
 - **UI.** The nav shows a **profile switcher** (`ui/profile::render_switcher`, `SwitcherStyle::Nav`)
   — switch profiles, pick "New profile" (→ the new-profile onboarding flow), or "Delete current
   profile" (→ the shell's delete confirmation). The onboarding screen has three modes
@@ -601,7 +619,8 @@ How it's enforced (keep new data consistent with this):
   one): the shell shows it (via `DashboardApp::render` choosing FirstRun vs Reselect on the
   profiles list) with a switcher to open one + a create field, but no Back. The shell resets
   transient board/notes/projects/todos state when the active profile changes so one profile's
-  open modals don't bleed into another.
+  open modals don't bleed into another — and in that same branch restores `active_tab` from the
+  new profile's persisted `last_view` (above).
 
 ---
 
@@ -850,8 +869,9 @@ a default (or nullable), a new index. When in doubt, ask.
 - Screenshots (`dev-dash shot`) use DEV_VIEW mocks and touch **no** database — safe anytime.
 
 **Agent permissions** (`.claude/settings.json`) enforce this: only `dev-dash build|shot|snap|
-sandbox` and `cargo fmt|clippy` are allowed; `dev-dash db` and `dev-dash open` are denied. Drive
-the sandbox through `dev-dash sandbox`, not the raw `static/scripts/sandbox-db.sh`.
+sandbox` and `cargo fmt|clippy` are allowed; `dev-dash db`, `dev-dash open`, and `dev-dash
+bootstrap` are denied (bootstrap starts the prod DB stack, §14). Drive the sandbox through
+`dev-dash sandbox`, not the raw `static/scripts/sandbox-db.sh`.
 
 ---
 
@@ -880,16 +900,18 @@ to the owning feature via the shell, exactly like the create-worktree hand-off (
 
 ---
 
-## 14. macOS app bundle (`dev-dash bundle`)
+## 14. macOS app bundle (`dev-dash mac`) & bootstrap
 
 > **The bundle is a thin wrapper around the release build, not a redistributable.** This is a
-> self-use tool (§0) tied to a local Postgres and the repo's own `target/`. `dev-dash bundle`
+> self-use tool (§0) tied to a local Postgres and the repo's own `target/`. `dev-dash mac bundle`
 > just gives the owner a **double-clickable `.app`** (Dock/Spotlight/Finder) instead of a
 > terminal launch — it is NOT a signed, self-contained, shippable artifact.
 
-`./dev-dash bundle` → `static/scripts/bundle-macos.sh` release-builds and assembles
-**`builds/macos/DevDashboard.app`** (gitignored output, §2 top-level layout); `dev-dash bundle
-copy` also installs it into `/Applications`. Structure:
+macOS packaging lives under the **`mac`** command group (OS-scoped, so other platforms can grow
+their own later): `dev-dash mac` runs `bundle` by default. `./dev-dash mac bundle` →
+`static/scripts/bundle-macos.sh` release-builds and assembles **`builds/macos/DevDashboard.app`**
+(gitignored output, §2 top-level layout); `dev-dash mac copy` also installs it into
+`/Applications`. Structure:
 
 ```
 builds/macos/DevDashboard.app/Contents/
@@ -944,10 +966,18 @@ The icon reaches the running app **two ways**, both needed:
   is untouched. Don't "simplify" this to a raw NSImage-from-PNG path: eframe decodes to raw RGBA
   on purpose to dodge a macOS libpng SIGBUS bug.
 
-`dev-dash bundle` is allowlisted (`Bash(./dev-dash:*)`, §6) and touches **no** database — it only
-builds + copies files, so it's safe to run anytime (unlike `dev-dash db`/`open`, §12). Its
-subcommand **`dev-dash bundle copy`** additionally installs the bundle into `/Applications` (so
+`dev-dash mac` touches **no** database — it only builds + copies files, so it's safe (it isn't on
+the agent allowlist, so it prompts, but unlike `dev-dash db`/`open` it's not *denied*, §12). Its
+subcommand **`dev-dash mac copy`** additionally installs the bundle into `/Applications` (so
 Spotlight/Launchpad find it) — `cp -R` preserves the absolute binary symlink, and it nudges
 LaunchServices (`touch`) so Finder refreshes the icon; if `/Applications` isn't writable it fails
 loudly with a `sudo cp -R` hint rather than half-installing. Both `bundle-macos.sh` and
 `icon-gen.sh` live in `static/scripts/` and, like the other scripts, are edit-gated (§6).
+
+**`dev-dash bootstrap mac`** is a one-shot machine setup for the owner: it **requires Docker to be
+running** (errors out with a "start Docker Desktop" hint if not — it deliberately does NOT launch
+Docker itself), then runs `db up`, `mac bundle`, and `mac copy` in sequence, leaving a running DB
+and an installed `.app`. Because it starts the **production** DB stack it is **denied to agents**
+(`Bash(./dev-dash bootstrap:*)` in `.claude/settings.json`, alongside `db`/`open`, §12) — never run
+it. `bootstrap` is OS-scoped: only `mac`/`macos` is wired up today, and an unknown/absent target
+errors rather than guessing, leaving room for other platforms' flows later.

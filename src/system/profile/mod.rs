@@ -7,7 +7,7 @@
 use sqlx::postgres::PgPool;
 use uuid::Uuid;
 
-use crate::domain::profile::Profile;
+use crate::domain::profile::{Profile, ProfileView};
 use crate::error::{AppError, DbError, TaskError};
 
 /// Service for the owner's profiles (onboarding, switching, listing).
@@ -24,7 +24,7 @@ impl ProfileService {
     /// Every profile, oldest first — the switcher's menu.
     pub async fn list(&self) -> Result<Vec<Profile>, DbError> {
         sqlx::query_as::<_, Profile>(
-            "SELECT id, display_name, created_at FROM profiles ORDER BY created_at ASC",
+            "SELECT id, display_name, created_at, last_view FROM profiles ORDER BY created_at ASC",
         )
         .fetch_all(&self.pool)
         .await
@@ -42,7 +42,7 @@ impl ProfileService {
     /// delete the owner chooses which workspace to open rather than being dropped into one.
     pub async fn active(&self) -> Result<Option<Profile>, DbError> {
         sqlx::query_as::<_, Profile>(
-            "SELECT id, display_name, created_at FROM profiles WHERE is_active LIMIT 1",
+            "SELECT id, display_name, created_at, last_view FROM profiles WHERE is_active LIMIT 1",
         )
         .fetch_optional(&self.pool)
         .await
@@ -59,9 +59,11 @@ impl ProfileService {
             return Err(TaskError::Empty { field: "name" }.into());
         }
 
+        // `last_view` is omitted so it takes its DEFAULT ('tasks') — a new profile lands on the
+        // main dashboard (§9). RETURNING reads it back for the caller.
         let profile = sqlx::query_as::<_, Profile>(
             "INSERT INTO profiles (id, display_name) VALUES ($1, $2) \
-             RETURNING id, display_name, created_at",
+             RETURNING id, display_name, created_at, last_view",
         )
         .bind(Uuid::new_v4())
         .bind(name)
@@ -86,6 +88,21 @@ impl ProfileService {
             .await
             .map_err(|source| DbError::Query {
                 context: "set active profile",
+                source,
+            })?;
+        Ok(())
+    }
+
+    /// Persist which workspace page `id` was last viewing (AGENTS.md §9). Bound as its stored
+    /// string form; a no-op-shaped `UPDATE` that just records where the owner was.
+    pub async fn set_last_view(&self, id: Uuid, view: ProfileView) -> Result<(), AppError> {
+        sqlx::query("UPDATE profiles SET last_view = $1 WHERE id = $2")
+            .bind(view.as_str())
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|source| DbError::Query {
+                context: "set profile last view",
                 source,
             })?;
         Ok(())

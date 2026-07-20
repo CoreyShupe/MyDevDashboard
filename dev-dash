@@ -6,7 +6,7 @@
 #     ln -s "$(pwd)/dev-dash" /usr/local/bin/dev-dash   # or ~/bin/dev-dash
 #
 # Commands:
-#     dev-dash build [release]  Compile (debug by default; `release` for optimized).
+#     dev-dash build [prod]     Compile (debug by default; `prod` for an optimized release build).
 #     dev-dash db up            Start the local PostgreSQL (persistent volume).
 #     dev-dash db down          Stop it (data preserved).
 #     dev-dash db reset         DESTROY the volume + all data (confirmation-gated).
@@ -19,12 +19,17 @@
 #                               In-app "Restart" (exit 86) is caught here: dev re-runs
 #                               `cargo run`; prod rebuilds + relaunches. The Restart button
 #                               only exists in dev/debug builds — release omits it.
-#     dev-dash bundle [copy]    Build a macOS .app bundle into builds/macos/DevDashboard.app.
-#                               Release-builds, then assembles a bundle whose executable is a
-#                               SYMLINK to target/release/<bin> (not a copy) and whose launcher
-#                               cd's into the bundle to load a COPIED .env. Double-clickable.
-#                               `copy` also installs it into /Applications (so Spotlight/Launchpad
-#                               find it).
+#     dev-dash mac [bundle]     Build a macOS .app bundle into builds/macos/DevDashboard.app
+#                               (`bundle` is the default). Release-builds, then assembles a bundle
+#                               whose executable is a SYMLINK to target/release/<bin> (not a copy)
+#                               and whose launcher cd's into the bundle to load a COPIED .env.
+#                               Double-clickable.
+#     dev-dash mac copy         Same as `mac bundle`, and ALSO installs it into /Applications (so
+#                               Spotlight/Launchpad find it).
+#     dev-dash bootstrap mac    One-shot macOS setup: require Docker to be running (errors if not),
+#                               start the database (db up), then build AND install the .app bundle
+#                               (mac bundle + copy). Only macOS is supported today; other OSes may
+#                               get their own flow.
 #     dev-dash shot VIEW OUT    Screenshot a DEV_VIEW to OUT.png, then exit the app.
 #                               VIEW = onboarding|new-profile|board|ticket|page|create|
 #                                      notes|notes-file|error (see ui::dev).
@@ -50,7 +55,7 @@ cd "$SCRIPT_DIR"
 
 usage() {
   # Print the command reference from this file's header comment.
-  sed -n '3,35p' "$SOURCE"
+  sed -n '3,41p' "$SOURCE"
   exit "${1:-0}"
 }
 
@@ -77,13 +82,27 @@ capture_window() {
   fi
 }
 
+# Require the Docker daemon to be up (macOS: Docker Desktop). We DON'T start it — a bootstrap
+# shouldn't silently launch apps; if it isn't running we error out and let the owner start it.
+require_docker_running() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "error: docker not found. Install Docker Desktop for Mac: https://www.docker.com/products/docker-desktop/" >&2
+    exit 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    echo "error: docker isn't running. Start Docker Desktop, then re-run 'dev-dash bootstrap mac'." >&2
+    exit 1
+  fi
+  echo "dev-dash: docker is running."
+}
+
 cmd="${1:-open}"
 case "$cmd" in
   build)
     case "${2:-}" in
-      ""|debug) exec cargo build ;;
-      release)  exec cargo build --release ;;
-      *)        echo "error: unknown build mode '${2:-}' (use 'release' or omit)" >&2; usage 1 ;;
+      ""|debug)      exec cargo build ;;
+      prod|release)  exec cargo build --release ;;  # `prod` is the canonical name (matches `open prod`); `release` kept as an alias
+      *)             echo "error: unknown build mode '${2:-}' (use 'prod' or omit)" >&2; usage 1 ;;
     esac
     ;;
 
@@ -145,14 +164,35 @@ case "$cmd" in
     exit 0
     ;;
 
-  bundle)
-    # Assemble a macOS .app bundle (release build + symlinked binary + copied .env).
-    #   (no arg) → build into builds/macos/  ·  copy → build, then install into /Applications.
-    case "${2:-}" in
-      "")   exec ./static/scripts/bundle-macos.sh ;;
-      copy) exec ./static/scripts/bundle-macos.sh copy ;;
-      *)    echo "error: unknown 'bundle' subcommand '${2:-}' (use 'copy' or omit)" >&2; usage 1 ;;
+  mac)
+    # macOS-specific packaging. Assemble a .app bundle (release build + symlinked binary + copied
+    # .env). `bundle` (the default) builds into builds/macos/; `copy` also installs to /Applications.
+    case "${2:-bundle}" in
+      bundle) exec ./static/scripts/bundle-macos.sh ;;
+      copy)   exec ./static/scripts/bundle-macos.sh copy ;;
+      *)      echo "error: unknown 'mac' subcommand '${2:-}' (use 'bundle' (default) or 'copy')" >&2; usage 1 ;;
     esac
+    ;;
+
+  bootstrap)
+    # One-shot machine setup, matched per OS so each platform can have its own workflow. Only
+    # macOS is wired up today; anything else errors rather than guessing.
+    case "${2:-}" in
+      mac|macos)
+        echo "dev-dash: bootstrapping for macOS …"
+        require_docker_running
+        echo "dev-dash: starting the database (db up) …"
+        ./static/scripts/db-up.sh
+        echo "dev-dash: building the .app bundle (mac bundle) …"
+        ./static/scripts/bundle-macos.sh
+        echo "dev-dash: installing the .app bundle to /Applications (mac copy) …"
+        ./static/scripts/bundle-macos.sh copy
+        echo "dev-dash: bootstrap complete."
+        ;;
+      "") echo "error: 'bootstrap' needs a target OS, e.g. 'dev-dash bootstrap mac'." >&2; usage 1 ;;
+      *)  echo "error: unsupported bootstrap target '${2}' (only 'mac'/'macos' is supported today)." >&2; usage 1 ;;
+    esac
+    exit 0
     ;;
 
   shot)

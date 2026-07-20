@@ -10,7 +10,8 @@
     ],
     "deny": [
       "Bash(./dev-dash db:*)",
-      "Bash(./dev-dash open:*)"
+      "Bash(./dev-dash open:*)",
+      "Bash(./dev-dash bootstrap:*)"
     ],
     "ask": [
       "Edit(dev-dash)",

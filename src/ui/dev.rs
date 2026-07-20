@@ -114,11 +114,13 @@ pub fn mock_empty() -> ViewData {
         id: Uuid::new_v4(),
         display_name: "Work".to_owned(),
         created_at: now,
+        last_view: crate::domain::profile::ProfileView::Tasks,
     };
     let personal = Profile {
         id: Uuid::new_v4(),
         display_name: "Personal".to_owned(),
         created_at: now,
+        last_view: crate::domain::profile::ProfileView::Tasks,
     };
     ViewData {
         profile: profile::View {
@@ -137,11 +139,13 @@ pub fn mock_reselect() -> ViewData {
         id: Uuid::new_v4(),
         display_name: "Work".to_owned(),
         created_at: now,
+        last_view: crate::domain::profile::ProfileView::Tasks,
     };
     let personal = Profile {
         id: Uuid::new_v4(),
         display_name: "Personal".to_owned(),
         created_at: now,
+        last_view: crate::domain::profile::ProfileView::Tasks,
     };
     ViewData {
         profile: profile::View {
@@ -160,12 +164,14 @@ pub fn mock_board() -> ViewData {
         id: Uuid::new_v4(),
         display_name: "Work".to_owned(),
         created_at: now,
+        last_view: crate::domain::profile::ProfileView::Tasks,
     };
     let work_id = work.id;
     let personal = Profile {
         id: Uuid::new_v4(),
         display_name: "Personal".to_owned(),
         created_at: now,
+        last_view: crate::domain::profile::ProfileView::Tasks,
     };
     let profile = profile::View {
         profiles: vec![work.clone(), personal],
