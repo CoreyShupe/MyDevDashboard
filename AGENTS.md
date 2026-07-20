@@ -42,9 +42,10 @@ allowlisted (it will prompt) — use the wrapper.
 | Launch the app detached (in-app Restart rebuilds/relaunches) | `./dev-dash open [dev]` |
 | Database up / down / wipe+restart / shell | `./dev-dash db up` · `db down` · `db reset` · `db psql` |
 
-`VIEW` ∈ `onboarding · new-profile · board · ticket · page · create · stage-edit · notes ·
-notes-file · projects · project · todos · error` (defined in `ui/dev.rs`; see §8). **Never edit
-`dev-dash` itself** (trust boundary, §6).
+`VIEW` ∈ `onboarding · new-profile · board · board-empty · ticket · page · create · stage-edit ·
+notes · notes-empty · notes-file · todos · todos-empty · projects · projects-empty · project ·
+error` (defined in `ui/dev.rs`; see §8). Every one has a committed screenshot under
+`screenshots/` (§11). **Never edit `dev-dash` itself** (trust boundary, §6).
 
 **Before you're done:** `cargo fmt` → `cargo clippy` (clean) → `./dev-dash build` → **screenshot
 every screen you touched** (§8). No unit tests (§6). If you added a crate/feature/table/error
@@ -471,24 +472,29 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 |--------|--------|
 | `onboarding`  | First-run: create your first profile |
 | `new-profile` | "New profile" create screen (switcher top-left) over existing profiles |
-| `board`       | Populated Tasks board (profiles "Work"/"Personal") |
-| `ticket`      | Ticket detail modal |
-| `page`        | Ticket detail, full-page (expanded) |
-| `create`      | New-ticket create modal (with stage picker) |
-| `stage-edit`  | Edit-stage modal (name + terminal toggle + delete) |
-| `notes`       | Notes tab, populated |
-| `notes-file`  | Notes tab with the "Add to ticket" picker open |
-| `projects`    | Projects tab: card grid (up-to-date / out-of-sync / no-origin states) |
-| `project`     | A project's full-page detail (metadata + live + removed worktrees) |
-| `todos`       | Todos tab: open tasks (the mock's one done todo is hidden) |
-| `error`       | The error modal |
+| `board`          | Populated Tasks board (profiles "Work"/"Personal") |
+| `board-empty`    | Tasks board with no stages (empty state) |
+| `ticket`         | Ticket detail modal |
+| `page`           | Ticket detail, full-page (expanded) |
+| `create`         | New-ticket create modal (with stage picker) |
+| `stage-edit`     | Edit-stage modal (name + terminal toggle + delete) |
+| `notes`          | Notes tab, populated |
+| `notes-empty`    | Notes tab with no notes (empty state) |
+| `notes-file`     | Notes tab with the "Add to ticket" picker open |
+| `todos`          | Todos tab: open tasks (the mock's one done todo is hidden) |
+| `todos-empty`    | Todos tab with nothing to do (empty state) |
+| `projects`       | Projects tab: card grid (up-to-date / out-of-sync / no-origin states) |
+| `projects-empty` | Projects tab with no projects (empty state) |
+| `project`        | A project's full-page detail (metadata + live + removed worktrees) |
+| `error`          | The error modal |
 
 (The `board`/`ticket`/`page` mocks also carry projects + worktrees, so the ticket detail's
-worktree section renders under `DEV_VIEW=ticket`/`page`.)
+worktree section renders under `DEV_VIEW=ticket`/`page`. The `*-empty` views share one
+`dev::mock_empty()` — a profile with no feature data — differing only by active tab.)
 
 **When you add a screen/feature, add a `DevView` variant + mock to `ui/dev.rs`** (and a row
-above) so it stays reviewable. Dev mocks are gated solely by the env var — never wire them into
-a normal run.
+above) so it stays reviewable, then capture its screenshot into the gallery (§11). Dev mocks are
+gated solely by the env var — never wire them into a normal run.
 
 > **Make the feature actually visible in the mock.** A screenshot only verifies what the mock
 > exercises. If your change shows only with certain data (a long string to force wrapping, >N
@@ -580,3 +586,61 @@ in `system/projects/git.rs` and rolls up as `ProcessError` like git does.
 `project_id`, `ticket_id`, `name`, `branch`, `removed_at`, with `UNIQUE(project_id, ticket_id)`
 and a partial-unique on active `(project_id, name)`). Both cascade from their parents. Keep the
 worktrees table lean — it takes common hard creates/deletes.
+
+---
+
+## 11. Screenshot gallery (keep it current)
+
+> **The gallery is a maintained artifact, not a scratch dump.** `screenshots/` is a committed,
+> browsable record of what every screen looks like — one folder per feature, one PNG per
+> `DEV_VIEW`. The owner reviews flows here. **A screen whose look changed with STALE pixels in
+> the gallery is a bug in your change.** (This is distinct from `tmp/screenshots/`, the
+> gitignored scratch you capture into while iterating, §8.)
+
+**Layout.** `screenshots/<feature>/<DEV_VIEW>.png` — the filename is exactly the `DEV_VIEW` key
+(§8), so the mapping is 1:1 and unambiguous. `screenshots/README.md` is the index (per-feature
+tables + inline thumbnails); regenerate/extend it alongside the images.
+
+| Folder | Screens (`DEV_VIEW`) |
+|--------|----------------------|
+| `profile/`  | `onboarding`, `new-profile` |
+| `tasks/`    | `board`, `board-empty`, `ticket`, `page`, `create`, `stage-edit` |
+| `notes/`    | `notes`, `notes-empty`, `notes-file` |
+| `todos/`    | `todos`, `todos-empty` |
+| `projects/` | `projects`, `projects-empty`, `project` |
+| `shell/`    | `error` (cross-cutting overlays, not tied to a tab) |
+
+**The invariant (must always hold):**
+1. **Every `DEV_VIEW` has a mock AND a committed screenshot.** Adding a `DevView` variant
+   without capturing its PNG, or vice-versa, is incomplete.
+2. **Every user-facing view, flow, and meaningful data variation has a `DEV_VIEW`.** Empty vs.
+   populated, and distinct states (e.g. a git card's up-to-date / out-of-sync / no-origin) must
+   be reachable and captured — add a variant (e.g. `*-empty`) when one is missing. A state you
+   can't screenshot is a state you can't review.
+3. **Mock data must exercise the thing.** The mock has to actually render the feature/variation
+   the screenshot is meant to show (the §8 "make it visible in the mock" rule).
+
+**When you touch UI, in the SAME change:**
+- **New screen/feature** → add the `DevView` + mock (§8), create `screenshots/<feature>/` if
+  new, capture the PNG(s), and add them to `screenshots/README.md`.
+- **Changed look/layout/copy of an existing flow** → recapture every affected view's PNG (both
+  presentations where relevant, e.g. `ticket` *and* `page`) so the gallery matches `main`.
+- **Recapture views whose visible BACKGROUND changed, not just the view you edited.** Many
+  screens render a modal/picker/overlay over a tab that still shows behind it — so a change to
+  that tab makes those overlay shots stale too. Concretely: an edit to the notes rows means
+  recapturing `notes-file` (the "Add to ticket" picker sits over the notes list), a board change
+  means recapturing `ticket`/`create`/`stage-edit` (all overlay the board), etc. Scan for every
+  view that shows the thing you changed anywhere in frame.
+- **New data variation** (empty state, error, a new status) → add a `DEV_VIEW` for it and capture
+  it; don't rely on an existing shot to "sort of" cover it.
+- **Removed screen** → delete its `DevView`, its PNG, and its gallery/table rows.
+
+**Regenerate** (from the repo root; the wrapper is pre-approved, §6):
+
+```bash
+./dev-dash shot <DEV_VIEW> screenshots/<feature>/<DEV_VIEW>.png
+# e.g. ./dev-dash shot projects screenshots/projects/projects.png
+```
+
+Then **Read the PNG** to confirm it rendered what you intended (§8) before reporting done. The
+canonical list of every view lives in the §8 table; this gallery must mirror it exactly.

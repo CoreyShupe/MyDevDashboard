@@ -139,6 +139,22 @@ impl DashboardApp {
                 self.data = Rc::new(dev::mock_board());
                 self.active_tab = Tab::Todos;
             }
+            dev::DevView::BoardEmpty => {
+                self.data = Rc::new(dev::mock_empty());
+                self.active_tab = Tab::Tasks;
+            }
+            dev::DevView::NotesEmpty => {
+                self.data = Rc::new(dev::mock_empty());
+                self.active_tab = Tab::Notes;
+            }
+            dev::DevView::TodosEmpty => {
+                self.data = Rc::new(dev::mock_empty());
+                self.active_tab = Tab::Todos;
+            }
+            dev::DevView::ProjectsEmpty => {
+                self.data = Rc::new(dev::mock_empty());
+                self.active_tab = Tab::Projects;
+            }
         }
         tracing::warn!(
             ?view,

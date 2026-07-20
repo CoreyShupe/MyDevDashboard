@@ -42,6 +42,11 @@ pub enum DevView {
     Project,
     /// The Todos tab: quick tasks, one already checked off.
     Todos,
+    /// Empty states (profile exists, but the feature has no data yet).
+    BoardEmpty,
+    NotesEmpty,
+    TodosEmpty,
+    ProjectsEmpty,
     Error,
 }
 
@@ -61,9 +66,36 @@ impl DevView {
             "projects" => Some(Self::Projects),
             "project" => Some(Self::Project),
             "todos" => Some(Self::Todos),
+            "board-empty" => Some(Self::BoardEmpty),
+            "notes-empty" => Some(Self::NotesEmpty),
+            "todos-empty" => Some(Self::TodosEmpty),
+            "projects-empty" => Some(Self::ProjectsEmpty),
             "error" => Some(Self::Error),
             _ => None,
         }
+    }
+}
+
+/// A mock with an active profile but NO feature data — for capturing empty states (empty
+/// board / notes / todos / projects). The profile switcher still has two profiles.
+pub fn mock_empty() -> ViewData {
+    let now = Utc::now();
+    let work = Profile {
+        id: Uuid::new_v4(),
+        display_name: "Work".to_owned(),
+        created_at: now,
+    };
+    let personal = Profile {
+        id: Uuid::new_v4(),
+        display_name: "Personal".to_owned(),
+        created_at: now,
+    };
+    ViewData {
+        profile: profile::View {
+            profiles: vec![work.clone(), personal],
+            active: Some(work),
+        },
+        ..ViewData::default()
     }
 }
 

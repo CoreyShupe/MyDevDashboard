@@ -2,11 +2,14 @@
 //!   - a **modal** overlay (default), and
 //!   - a **full page** in the workspace (via the modal's expand button; Back returns).
 //!
-//! Both share one editing state ([`TicketModal`]) and the same body renderers
-//! ([`body_main`] plus [`notes_section`]); they differ only in the surrounding chrome and
-//! how they lay those out — the modal stacks a capped notes list under the body, the full
-//! page puts the full notes list in a wide column beside it. Intents are collected and
-//! dispatched after the state's mutable borrow ends.
+//! Both share one editing state ([`TicketModal`]). They deliberately show DIFFERENT amounts:
+//!   - the **modal** is a quick editor — [`body_core`] (title, description, save / move /
+//!     delete) + [`body_relationships`] (parent/child are quick navigation), then a one-line
+//!     summary and an Expand link. It stays short.
+//!   - the **full page** adds [`body_worktrees`] beside a full [`notes_section`] — everything,
+//!     with room to breathe.
+//!
+//! Intents are collected into an [`Outcome`] and dispatched after the state's mutable borrow ends.
 
 use uuid::Uuid;
 
@@ -103,12 +106,24 @@ impl BoardState {
                     });
                 });
                 ui.add_space(10.0);
-                body_main(ui, modal, view, projects, bridge, &mut out);
+                // The modal is the QUICK editor: core fields + actions + relationships (parent/
+                // child are quick navigation), then a compact summary. Worktrees and the notes
+                // list live on the full page (Expand) so the modal stays short (AGENTS.md §8).
+                body_core(ui, modal, view, &mut out);
+                body_relationships(ui, modal, view, &mut out);
                 ui.add_space(14.0);
                 ui.separator();
+                ui.add_space(8.0);
+                modal_summary(ui, modal, projects);
                 ui.add_space(6.0);
-                // Modal stays compact: show only the last 2 notes with a "N more" line.
-                notes_section(ui, modal, &mut out, Some(2));
+                if button::link(
+                    ui,
+                    &format!("{} Expand for worktrees & notes", theme::icon::EXPAND),
+                )
+                .clicked()
+                {
+                    modal.expanded = true;
+                }
             });
 
         let dismissed = response.should_close();
@@ -152,7 +167,9 @@ impl BoardState {
                 ui.spacing_mut().item_spacing.x = 40.0;
                 ui.columns(2, |cols| {
                     cols[0].spacing_mut().item_spacing.x = 8.0;
-                    body_main(&mut cols[0], modal, view, projects, bridge, &mut out);
+                    body_core(&mut cols[0], modal, view, &mut out);
+                    body_relationships(&mut cols[0], modal, view, &mut out);
+                    body_worktrees(&mut cols[0], modal, projects, bridge, &mut out);
                     cols[1].spacing_mut().item_spacing.x = 8.0;
                     notes_section(&mut cols[1], modal, &mut out, None);
                 });
@@ -196,17 +213,9 @@ impl BoardState {
     }
 }
 
-/// The main detail body: title, description, actions, relationships. The notes section is
-/// rendered separately so each presentation can place it differently — the modal appends a
-/// capped list below this, the full page gives it its own wide column beside this.
-fn body_main(
-    ui: &mut egui::Ui,
-    modal: &mut TicketModal,
-    view: &TasksView,
-    projects: &ProjectsView,
-    bridge: &Bridge,
-    out: &mut Outcome,
-) {
+/// The core detail body shown in BOTH presentations: title, description, and the action row
+/// (save / move stage / delete). Kept deliberately small so the modal stays short.
+fn body_core(ui: &mut egui::Ui, modal: &mut TicketModal, view: &TasksView, out: &mut Outcome) {
     let muted = theme::palette().muted;
     let ticket_id = modal.ticket_id;
     let saved = view.ticket(ticket_id);
@@ -263,14 +272,32 @@ fn body_main(
             }
         });
     });
+}
 
+/// The **Relationships** section (parent quick-link, children, add-child). Shown in BOTH
+/// presentations — parent/child are quick navigation, which belongs in the quick modal too.
+fn body_relationships(
+    ui: &mut egui::Ui,
+    modal: &mut TicketModal,
+    view: &TasksView,
+    out: &mut Outcome,
+) {
     ui.add_space(14.0);
     ui.separator();
     ui.add_space(6.0);
     ui.label(egui::RichText::new("Relationships").strong().size(15.0));
     ui.add_space(6.0);
     super::link::render(ui, modal, view, &mut out.events, &mut out.navigate);
+}
 
+/// The **Worktrees** section — full page only (the modal summarises it, to stay short).
+fn body_worktrees(
+    ui: &mut egui::Ui,
+    modal: &TicketModal,
+    projects: &ProjectsView,
+    bridge: &Bridge,
+    out: &mut Outcome,
+) {
     ui.add_space(14.0);
     ui.separator();
     ui.add_space(6.0);
@@ -279,9 +306,33 @@ fn body_main(
     // Worktrees are a cross-feature (projects) concern; the projects UI renders this ticket's
     // worktrees and reports whether the owner asked to create one (AGENTS.md §2). Open/remove/
     // recreate emit projects events directly through the bridge.
-    if crate::ui::projects::render_ticket_worktrees(ui, bridge, ticket_id, projects) {
+    if crate::ui::projects::render_ticket_worktrees(ui, bridge, modal.ticket_id, projects) {
         out.create_worktree = true;
     }
+}
+
+/// The modal's one-line hint at what's behind Expand — note + worktree counts (children are
+/// already shown inline via Relationships, so they're not repeated here).
+fn modal_summary(ui: &mut egui::Ui, modal: &TicketModal, projects: &ProjectsView) {
+    let muted = theme::palette().muted;
+    let count = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+
+    let live_worktrees = projects
+        .worktrees_for_ticket(modal.ticket_id)
+        .filter(|w| w.is_live())
+        .count();
+
+    let mut parts = Vec::new();
+    if modal.notes_loaded {
+        parts.push(count(modal.notes.len(), "note"));
+    }
+    parts.push(count(live_worktrees, "worktree"));
+
+    ui.label(
+        egui::RichText::new(parts.join("  ·  "))
+            .color(muted)
+            .size(12.5),
+    );
 }
 
 /// The notes section (header + list + entry). `limit` caps how many recent notes show —

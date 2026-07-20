@@ -3,13 +3,14 @@
 //! Layout (deliberately roomy, not compact — this is a scratchpad you scan and act on):
 //!   - a **composer** at the top: a single-line "New note" field + Add (Enter also adds),
 //!   - a scrollable list of **note rows**, newest first. Each row shows the wrapped note
-//!     body (given generous height so it stays readable) with two actions stacked on the
-//!     right: **Create Ticket** (opens the ticket create modal pre-filled) and **Add To
-//!     Ticket** (opens a search picker to file it onto an existing ticket).
+//!     body (given generous height so it stays readable), then a standalone **Make Todo**
+//!     column, then the two ticket actions **stacked** in one column at the right edge:
+//!     **Create Ticket** (opens the ticket create modal pre-filled) and **Add To Ticket**
+//!     (opens a search picker to file it onto an existing ticket).
 //!
-//! Pure rendering (AGENTS.md §2): mutations go out as `notes::Event`s. "Create Ticket"
-//! can't be done here alone (it drives the board's create modal), so it's surfaced to the
-//! app shell via [`NotesOutcome`].
+//! Pure rendering (AGENTS.md §2): mutations go out as `notes::Event`s. **Make Todo** fires
+//! immediately (add todo + drop the note). "Create Ticket" can't be done here alone (it drives
+//! the board's create modal), so it's surfaced to the app shell via [`NotesOutcome`].
 
 use uuid::Uuid;
 
@@ -124,8 +125,8 @@ impl NotesState {
         });
     }
 
-    /// A single note row: wrapped body (roomy) on the left, then a dedicated **Make Todo**
-    /// column, then the two ticket actions pinned to the right edge.
+    /// A single note row: wrapped body (roomy) on the left, a dedicated **Make Todo** column,
+    /// then the two ticket actions **stacked** in one column at the right edge.
     fn render_note_row(
         &mut self,
         ui: &mut egui::Ui,
@@ -137,11 +138,10 @@ impl NotesState {
 
         card::card(ui, |ui| {
             ui.set_width(ui.available_width());
-            // Rows are intentionally taller than the composer so there's room to write, with the
-            // actions sitting on the right.
-            const ROW_MIN_H: f32 = 72.0;
-            const TODO_W: f32 = 130.0; // the standalone "Make Todo" column
-            const ACTIONS_W: f32 = 290.0; // fits "Create Ticket" + "Add To Ticket" side by side
+            // Tall enough for the two stacked ticket buttons on the right.
+            const ROW_MIN_H: f32 = 78.0;
+            const TODO_W: f32 = 150.0; // the standalone "Make Todo" column
+            const ACTIONS_W: f32 = 150.0; // the stacked "Create Ticket" / "Add To Ticket" column
             const GAP: f32 = 14.0;
 
             ui.horizontal_top(|ui| {
@@ -174,12 +174,12 @@ impl NotesState {
 
                 // Middle: the standalone "Make Todo" action in its own column. Turning a note
                 // into a todo needs no further input, so it fires immediately (add todo + drop
-                // the note) — unlike the ticket actions, which open a modal/picker.
+                // the note) — unlike the ticket actions, which open a modal/picker. `_justified`
+                // stretches the button to the full column width.
                 ui.allocate_ui_with_layout(
                     egui::vec2(TODO_W, ROW_MIN_H),
-                    egui::Layout::top_down(egui::Align::Min),
+                    egui::Layout::top_down_justified(egui::Align::Center),
                     |ui| {
-                        ui.set_min_width(TODO_W);
                         if button::secondary(ui, &format!("{} Make Todo", theme::icon::TODOS))
                             .clicked()
                         {
@@ -190,18 +190,18 @@ impl NotesState {
 
                 ui.add_space(GAP);
 
-                // Right: the two ticket actions side by side, hugging the card's right edge
-                // (right-to-left, so the first added button is the rightmost).
+                // Right: the two ticket actions STACKED in one column (full-width, so they read
+                // as a pair), hugging the card's right edge.
                 ui.allocate_ui_with_layout(
                     egui::vec2(ACTIONS_W, ROW_MIN_H),
-                    egui::Layout::right_to_left(egui::Align::Min),
+                    egui::Layout::top_down_justified(egui::Align::Center),
                     |ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0; // gap between the two buttons
-                        if button::secondary(ui, "Add To Ticket").clicked() {
-                            self.add_to_ticket = Some(AddToTicketModal::new(note));
-                        }
+                        ui.spacing_mut().item_spacing.y = 8.0; // gap between the stacked buttons
                         if button::secondary(ui, "Create Ticket").clicked() {
                             outcome.create_ticket_from = Some((note.id, note.body.clone()));
+                        }
+                        if button::secondary(ui, "Add To Ticket").clicked() {
+                            self.add_to_ticket = Some(AddToTicketModal::new(note));
                         }
                     },
                 );
