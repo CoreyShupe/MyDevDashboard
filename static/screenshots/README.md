@@ -18,6 +18,19 @@ Regenerate everything (from the repo root):
 
 ---
 
+## home
+
+The cross-feature **Overview** — the app's landing tab. An at-a-glance roll-up: summary tiles,
+recent tickets, open todos, repos needing attention, and loose notes.
+
+| View | `DEV_VIEW` |
+|------|-----------|
+| Overview, populated across every feature | `home` |
+| Overview with no data yet (every section empty) | `home-empty` |
+
+![home](home/home.png)
+![home-empty](home/home-empty.png)
+
 ## profile
 
 Onboarding + the new-profile flow (no active tab; these take over the whole window).
@@ -26,9 +39,11 @@ Onboarding + the new-profile flow (no active tab; these take over the whole wind
 |------|-----------|
 | First-run onboarding (no profiles yet) | `onboarding` |
 | "New profile" create screen (from the switcher) | `new-profile` |
+| Profile picker (no active profile, others exist) | `profile-select` |
 
 ![onboarding](profile/onboarding.png)
 ![new-profile](profile/new-profile.png)
+![profile-select](profile/profile-select.png)
 
 ## tasks
 
@@ -38,6 +53,7 @@ The Tasks board and the ticket/stage flows.
 |------|-----------|
 | Board with stages + tickets (incl. a collapsed terminal stage) | `board` |
 | Empty board (profile, no stages) | `board-empty` |
+| Board with a search query filtering tickets across columns | `board-search` |
 | Ticket detail — modal overlay | `ticket` |
 | Ticket detail — full page (worktrees + notes) | `page` |
 | New-ticket create modal | `create` |
@@ -45,6 +61,7 @@ The Tasks board and the ticket/stage flows.
 
 ![board](tasks/board.png)
 ![board-empty](tasks/board-empty.png)
+![board-search](tasks/board-search.png)
 ![ticket](tasks/ticket.png)
 ![page](tasks/page.png)
 ![create](tasks/create.png)
@@ -110,6 +127,10 @@ Cross-cutting overlays that aren't tied to one tab.
 |------|-----------|
 | Blocking error modal (retryable DB error) | `error` |
 | Error modal for a failed external command (raw stderr shown) | `error-output` |
+| Pre-first-snapshot loading screen | `loading` |
+| Destructive-action confirmation (delete ticket) | `confirm-delete` |
 
 ![error](shell/error.png)
 ![error-output](shell/error-output.png)
+![loading](shell/loading.png)
+![confirm-delete](shell/confirm-delete.png)

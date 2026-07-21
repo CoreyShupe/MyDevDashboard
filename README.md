@@ -2,7 +2,9 @@
 
 **A single, self-owned home for your development work.** One native macOS window that pulls your
 tasks, quick notes, todos, and local git repositories into one calm, digestible place — so the
-state of your work lives somewhere other than your head. Your data never leaves your machine.
+state of your work lives somewhere other than your head. It opens on an **Overview** that rolls
+the whole workspace up at a glance — what's in progress, what's left to do, and which repos need a
+look — so you see where things stand the moment you launch. Your data never leaves your machine.
 
 <p align="center">
   <img src="static/screenshots/tasks/board.png" alt="The Tasks board — a Jira-like board of stages and tickets" width="880">
@@ -13,8 +15,8 @@ state of your work lives somewhere other than your head. Your data never leaves 
 
 ## Gallery
 
-Browse the **[full screenshot gallery](static/screenshots/)** for a tour of every screen — Tasks,
-Notes, Todos, and Projects. Everything else is discoverable in the app itself.
+Browse the **[full screenshot gallery](static/screenshots/)** for a tour of every screen — the
+Overview, Tasks, Notes, Todos, and Projects. Everything else is discoverable in the app itself.
 
 ## Disclaimer
 

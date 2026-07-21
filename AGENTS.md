@@ -21,7 +21,10 @@ specify a more precise sub-rule here first**, then continue. Do not silently dev
 
 **Shape.** Two axes (§2): horizontal layers `domain → system → app → ui`, crossed with vertical
 feature slices — `profile`, `tasks` (parts: `stage`, `ticket`, `note`), `notes`, `projects`
-(parts: `project`, `worktree`), `todos`. The **same feature name appears in every layer**. All
+(parts: `project`, `worktree`), `todos`. The **same feature name appears in every layer**. (One
+exception: `home` — the cross-feature Overview tab — is a **UI-only** feature that purely
+aggregates the others' already-loaded `ViewData`, so it exists solely as `ui/home/` with nothing
+in `domain`/`system`/`app`, §2.) All
 DB/business logic lives behind a `*Service` in `system/`; `app/` is the only UI↔system channel;
 `ui/` never touches the DB. The **one** place the app shells out to external commands (git, the
 editor launcher, and a project's per-worktree setup script) is `system/projects/git.rs` (§10).
@@ -45,11 +48,11 @@ allowlisted (it will prompt) — use the wrapper.
 | One-shot macOS setup: require Docker running → `db up` → build + install the `.app` | `./dev-dash bootstrap mac` |
 | Database up / down / wipe+restart / shell | `./dev-dash db up` · `db down` · `db reset` · `db psql` |
 
-`VIEW` ∈ `onboarding · new-profile · profile-select · board · board-empty · ticket · page ·
-create · stage-edit · confirm-delete · notes · notes-empty · notes-file · todos · todos-empty ·
-projects · projects-empty · projects-loading · projects-pulling · add-project · project ·
-setup-script · worktree-creating · worktree-removing · loading ·
-error · error-output` (defined
+`VIEW` ∈ `home · home-empty · onboarding · new-profile · profile-select · board · board-empty ·
+board-search · ticket · page · create · stage-edit · confirm-delete · notes · notes-empty ·
+notes-file · todos · todos-empty · projects · projects-empty · projects-loading ·
+projects-pulling · add-project · project · setup-script · worktree-creating · worktree-removing ·
+loading · error · error-output` (defined
 in `ui/dev.rs`; see §8). Every one has a committed screenshot under `static/screenshots/` (§11).
 **Never edit `dev-dash` itself** (trust boundary, §6).
 
@@ -71,10 +74,16 @@ owner to manage their development work in a digestible way. It builds and runs a
 
 Onboarding creates a **profile**. Profiles are self-contained workspaces the owner switches
 between (via the nav switcher) — everything belongs to exactly one and they never mix (§9).
-Inside the active profile: a configurable, Jira-like **Tasks** board (stages → tickets → notes;
+Inside the active profile, the first nav tab is a cross-feature **Home / Overview** — an
+at-a-glance roll-up of the whole workspace (summary tiles, the most recently-touched active
+tickets, open todos you can check off inline, repositories needing attention, and loose notes),
+each pointing into the tab that owns it. The rest: a configurable, Jira-like **Tasks** board
+(stages → tickets → notes;
 stages reorder by dragging their grip, and can be marked **terminal** in the edit-stage modal —
 an end state like "Complete"/"Cancelled" that collapses to a ticket count and is hidden from
-"Add to ticket"); a **Notes** tab for quick, uncategorized capture (which can later become a
+"Add to ticket"; a header **search** box filters tickets by title/description across every
+column, revealing matches even in collapsed terminal stages); a **Notes** tab for quick,
+uncategorized capture (which can later become a
 ticket or be filed onto one); a **Projects** tab — local repositories (never cloned) shown as
 cards with live git status, each opening to a detail page of its git **worktrees**, which are
 created per-ticket to enable parallel work on different branches (§10); and a **Todos** tab —
@@ -192,8 +201,13 @@ src/
     ├── theme.rs            Design system: palette, fonts, visuals, radii, frames, grid (§7).
     ├── components/         Shared component kit: input.rs, button.rs, card.rs, dnd.rs (§7).
     ├── dev.rs              Dev-only `DEV_VIEW` screen overrides for visual review (§8).
+    ├── home/               UI-ONLY feature: the cross-feature Overview/Home tab. Aggregates every
+    │                       other feature's `ViewData` slice into summary tiles + recent-work
+    │                       lists; emits navigation intents (`HomeOutcome`) + existing feature
+    │                       events. No `domain`/`system`/`app` (nothing to persist — it's a view).
     ├── profile/            Onboarding "setup profile" screen + its transient UI state.
-    ├── tasks/              mod.rs board + part renderers: stage.rs, ticket.rs, note.rs, modal.rs.
+    ├── tasks/              mod.rs board (+ live ticket SEARCH box) + part renderers: stage.rs,
+    │                       ticket.rs, note.rs, modal.rs.
     ├── notes/              Notes tab: composer + note rows + the "Add to ticket" picker.
     ├── projects/           Projects tab: card grid, project detail page (setup-script section +
     │                       live worktree rows), worktree loading/rows + add-project /
@@ -556,6 +570,8 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 
 | `VIEW` | Screen |
 |--------|--------|
+| `home`        | The cross-feature Overview, populated across every feature |
+| `home-empty`  | The Overview with an active profile but no data (every section empty) |
 | `onboarding`  | First-run: create your first profile |
 | `new-profile` | "New profile" create screen (switcher top-left) over existing profiles |
 | `profile-select` | Profile picker: no active profile but others exist (post-delete / reselect) |
@@ -571,6 +587,7 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 | `notes-file`     | Notes tab with the "Add to ticket" picker open |
 | `todos`          | Todos tab: open tasks (the mock's one done todo is hidden) |
 | `todos-empty`    | Todos tab with nothing to do (empty state) |
+| `board-search`   | Tasks board with a search query active, filtering tickets across every column |
 | `projects`       | Projects tab: card grid (up-to-date / out-of-sync / no-origin states) |
 | `projects-empty` | Projects tab with no projects (empty state) |
 | `projects-loading` | Projects tab mid-refresh — cards + header show the git-status spinner |
@@ -586,8 +603,10 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 
 (The `board`/`ticket`/`page` mocks also carry projects + worktrees, so the ticket detail's
 worktree section renders under `DEV_VIEW=ticket`/`page`; one mock project carries a setup script
-so the `project`/`setup-script` views render it populated. The `*-empty` views share one
-`dev::mock_empty()` — a profile with no feature data — differing only by active tab.)
+so the `project`/`setup-script` views render it populated. The `*-empty` views (incl.
+`home-empty`) share one `dev::mock_empty()` — a profile with no feature data — differing only by
+active tab. The `home` view uses `dev::mock_home()` = the `board` mock + loose notes, so all four
+Overview tiles and every section render with content.)
 
 **When you add a screen/feature, add a `DevView` variant + mock to `ui/dev.rs`** (and a row
 above) so it stays reviewable, then capture its screenshot into the gallery (§11). Dev mocks are
@@ -634,8 +653,8 @@ How it's enforced (keep new data consistent with this):
 - **Last-viewed page is per profile.** `profiles.last_view` (TEXT, migration 0009, default
   `'tasks'`) records which workspace page each profile was on, so **switching profiles or
   relaunching restores where the owner left off** rather than always landing on Tasks. It maps to
-  the domain `ProfileView` enum (`Tasks`/`Notes`/`Todos`/`Projects`; `from_db` degrades any
-  unknown value to the default so a stray string never breaks nav), which the UI `Tab` converts
+  the domain `ProfileView` enum (`Home`/`Tasks`/`Notes`/`Todos`/`Projects`; `from_db` degrades any
+  unknown value to the default `Tasks` so a stray string never breaks nav), which the UI `Tab` converts
   to/from. Writing it is a **quiet write-through**: clicking a nav tab sends
   `profile::Event::set_last_view(view)` → `ProfileService::set_last_view`, which does an `UPDATE`
   and **emits NO snapshot** (the UI already shows the tab — re-snapshotting every tab click would
@@ -827,8 +846,9 @@ tables + inline thumbnails); regenerate/extend it alongside the images.
 
 | Folder | Screens (`DEV_VIEW`) |
 |--------|----------------------|
+| `home/`     | `home`, `home-empty` |
 | `profile/`  | `onboarding`, `new-profile`, `profile-select` |
-| `tasks/`    | `board`, `board-empty`, `ticket`, `page`, `create`, `stage-edit` |
+| `tasks/`    | `board`, `board-empty`, `board-search`, `ticket`, `page`, `create`, `stage-edit` |
 | `notes/`    | `notes`, `notes-empty`, `notes-file` |
 | `todos/`    | `todos`, `todos-empty` |
 | `projects/` | `projects`, `projects-empty`, `projects-loading`, `projects-pulling`, `add-project`, `project`, `setup-script`, `worktree-creating`, `worktree-removing` |

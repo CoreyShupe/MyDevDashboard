@@ -144,10 +144,24 @@ impl BoardState {
             grip_rect = self.render_stage_header(ui, stage);
             ui.add_space(8.0);
 
-            let tickets: Vec<_> = view.tickets_for(stage.id).cloned().collect();
+            // Filter by the active board search (title/description, case-insensitive). Empty query
+            // → everything passes.
+            let query = self.search_query();
+            let searching = !query.is_empty();
+            let tickets: Vec<_> = view
+                .tickets_for(stage.id)
+                .filter(|t| {
+                    query.is_empty()
+                        || t.title.to_lowercase().contains(&query)
+                        || t.description.to_lowercase().contains(&query)
+                })
+                .cloned()
+                .collect();
             let expanded = self.viewing_terminal.contains(&stage.id);
 
-            if stage.terminal && !expanded {
+            // While searching, a terminal stage reveals its matches rather than collapsing to a
+            // count, so a hit is never hidden behind the summary.
+            if stage.terminal && !expanded && !searching {
                 // Collapsed end state: just a count + a way to reveal the tickets.
                 self.render_terminal_summary(ui, stage.id, tickets.len());
             } else {
@@ -159,16 +173,29 @@ impl BoardState {
                             self.render_ticket_card(ui, bridge, ticket);
                             ui.add_space(8.0);
                         }
+                        // A searched column with no hits shouldn't look broken — say so plainly.
+                        if searching && tickets.is_empty() {
+                            ui.label(
+                                egui::RichText::new("No matches")
+                                    .color(theme::palette().muted)
+                                    .size(12.5),
+                            );
+                        }
                     });
 
                 ui.add_space(2.0);
                 if stage.terminal {
                     // Revealed terminal stage: only there to move tickets back out — no
-                    // new-ticket affordance, just a way to collapse back to the count.
-                    if button::ghost(ui, &format!("{} Hide tickets", theme::icon::BACK)).clicked() {
+                    // new-ticket affordance, just a way to collapse back to the count. Hidden
+                    // while searching (the reveal is driven by the search, not the toggle).
+                    if expanded
+                        && !searching
+                        && button::ghost(ui, &format!("{} Hide tickets", theme::icon::BACK))
+                            .clicked()
+                    {
                         self.viewing_terminal.remove(&stage.id);
                     }
-                } else {
+                } else if !searching {
                     self.render_new_ticket(ui, stage.id);
                 }
             }

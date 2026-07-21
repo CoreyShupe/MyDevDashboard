@@ -22,7 +22,9 @@ pub struct Profile {
 /// column). The UI `Tab` converts to/from this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ProfileView {
-    /// The main dashboard (Tasks board) — the default landing page.
+    /// The cross-feature Overview / Home page — an at-a-glance roll-up of the whole workspace.
+    Home,
+    /// The main Tasks board — the default landing page for a freshly-created profile.
     #[default]
     Tasks,
     Notes,
@@ -34,6 +36,7 @@ impl ProfileView {
     /// The stored string form (the `profiles.last_view` value).
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Home => "home",
             Self::Tasks => "tasks",
             Self::Notes => "notes",
             Self::Todos => "todos",
@@ -45,6 +48,7 @@ impl ProfileView {
     /// unrecognized so a stray or legacy value never breaks navigation.
     pub fn from_db(s: &str) -> Self {
         match s {
+            "home" => Self::Home,
             "notes" => Self::Notes,
             "todos" => Self::Todos,
             "projects" => Self::Projects,

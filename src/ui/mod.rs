@@ -8,6 +8,7 @@ pub mod components;
 pub mod theme;
 
 mod dev;
+mod home;
 mod notes;
 mod profile;
 mod projects;
@@ -27,6 +28,7 @@ use components::confirm::{self, Choice};
 /// Which left-nav tab is active. One variant per feature surfaced in the workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
+    Home,
     Tasks,
     Notes,
     Projects,
@@ -38,6 +40,7 @@ impl Tab {
     fn as_view(self) -> crate::domain::profile::ProfileView {
         use crate::domain::profile::ProfileView;
         match self {
+            Tab::Home => ProfileView::Home,
             Tab::Tasks => ProfileView::Tasks,
             Tab::Notes => ProfileView::Notes,
             Tab::Projects => ProfileView::Projects,
@@ -49,6 +52,7 @@ impl Tab {
     fn from_view(view: crate::domain::profile::ProfileView) -> Self {
         use crate::domain::profile::ProfileView;
         match view {
+            ProfileView::Home => Tab::Home,
             ProfileView::Tasks => Tab::Tasks,
             ProfileView::Notes => Tab::Notes,
             ProfileView::Projects => Tab::Projects,
@@ -65,6 +69,7 @@ pub struct DashboardApp {
 
     // Per-feature UI state.
     onboarding: profile::OnboardingState,
+    home: home::HomeState,
     board: tasks::BoardState,
     notes: notes::NotesState,
     projects: projects::ProjectsState,
@@ -100,6 +105,7 @@ impl DashboardApp {
             data: Rc::new(ViewData::default()),
             active_tab: Tab::Tasks,
             onboarding: profile::OnboardingState::default(),
+            home: home::HomeState,
             board: tasks::BoardState::default(),
             notes: notes::NotesState::default(),
             projects: projects::ProjectsState::default(),
@@ -123,6 +129,14 @@ impl DashboardApp {
         self.dev_mode = true;
         self.loaded = true; // mock state stands in for a snapshot; never show the loading screen
         match view {
+            dev::DevView::Home => {
+                self.data = Rc::new(dev::mock_home());
+                self.active_tab = Tab::Home;
+            }
+            dev::DevView::HomeEmpty => {
+                self.data = Rc::new(dev::mock_empty());
+                self.active_tab = Tab::Home;
+            }
             dev::DevView::Onboarding => {} // default state (no profiles) shows first-run onboarding
             dev::DevView::NewProfile => {
                 self.data = Rc::new(dev::mock_board()); // existing profiles to switch back to
@@ -137,6 +151,10 @@ impl DashboardApp {
                 self.data = Rc::new(data);
             }
             dev::DevView::Board => self.data = Rc::new(dev::mock_board()),
+            dev::DevView::BoardSearch => {
+                self.board.dev_set_search("drag");
+                self.data = Rc::new(dev::mock_board());
+            }
             dev::DevView::Ticket => self.dev_open_ticket(false),
             dev::DevView::Page => self.dev_open_ticket(true),
             dev::DevView::Create => {
@@ -318,6 +336,7 @@ impl DashboardApp {
                     // state so one profile's open modals/buffers don't carry into another.
                     let active = data.profile.active_id();
                     if active != self.active_profile_id {
+                        self.home = home::HomeState;
                         self.board = tasks::BoardState::default();
                         self.notes = notes::NotesState::default();
                         self.projects = projects::ProjectsState::default();
@@ -380,7 +399,9 @@ impl DashboardApp {
                 }
                 ui.add_space(18.0);
 
-                // Nav tabs. Add a tab per feature as they land.
+                // Nav tabs. Add a tab per feature as they land. Home (the cross-feature Overview)
+                // sits at the top as the natural landing point.
+                self.nav_item(ui, Tab::Home, &format!("{} Home", theme::icon::HOME));
                 self.nav_item(ui, Tab::Tasks, &format!("{} Tasks", theme::icon::DASHBOARD));
                 self.nav_item(ui, Tab::Notes, &format!("{} Notes", theme::icon::NOTES));
                 self.nav_item(ui, Tab::Todos, &format!("{} Todos", theme::icon::TODOS));
@@ -418,6 +439,24 @@ impl DashboardApp {
                     .inner_margin(egui::Margin::same(18)),
             )
             .show(ui, |ui| match self.active_tab {
+                Tab::Home => {
+                    // The Overview aggregates every feature's slice; it reports navigation intents
+                    // (switch tab / open a ticket) for the shell to act on — like the Notes
+                    // create-ticket hand-off (AGENTS.md §2). Opening a ticket switches to Tasks and
+                    // opens its detail; the modal then renders in the overlay pass below.
+                    let outcome = self.home.render_workspace(ui, &self.bridge, data);
+                    if let Some(tab) = outcome.goto {
+                        self.active_tab = tab;
+                        self.bridge
+                            .send(crate::app::profile::Event::set_last_view(tab.as_view()));
+                    }
+                    if let Some(ticket_id) = outcome.open_ticket
+                        && let Some(ticket) = data.tasks.ticket(ticket_id)
+                    {
+                        self.active_tab = Tab::Tasks;
+                        self.board.open_ticket_modal(&self.bridge, ticket);
+                    }
+                }
                 Tab::Tasks => {
                     self.board
                         .render_workspace(ui, &self.bridge, &data.tasks, &data.projects)

@@ -66,6 +66,7 @@ pub mod icon {
     pub const RESTART: char = '\u{e042}'; // restart_alt (rebuild + relaunch)
     pub const FLAG: char = '\u{e153}'; // flag (terminal-stage marker)
     pub const CLOSE: char = '\u{e5cd}'; // close
+    pub const HOME: char = '\u{e88a}'; // home (nav: Overview / Home)
     pub const DASHBOARD: char = '\u{e871}'; // dashboard (nav: Tasks)
     pub const NOTES: char = '\u{e873}'; // description (nav: Notes)
     pub const TODOS: char = '\u{e065}'; // playlist_add_check (nav: Todos / "Make Todo")

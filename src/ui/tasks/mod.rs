@@ -25,6 +25,10 @@ use ticket::{NewTicketModal, TicketModal};
 #[derive(Default)]
 pub struct BoardState {
     new_stage_name: String,
+    /// Live board search query. When non-empty, only tickets whose title or description contain it
+    /// (case-insensitive) are shown, across every column — and terminal stages reveal their matches
+    /// instead of collapsing to a count, so nothing is hidden behind the count.
+    search: String,
     /// The open "edit stage" modal, if any (name + terminal toggle + delete).
     editing_stage: Option<StageModal>,
     /// Terminal stages whose tickets are currently revealed (via "View tickets").
@@ -64,6 +68,17 @@ impl BoardState {
     /// Dev-only: open the delete-ticket confirmation directly for review (see `ui::dev`).
     pub fn dev_open_delete_ticket_confirm(&mut self, ticket_id: Uuid) {
         self.confirm_delete_ticket = Some(ticket_id);
+    }
+
+    /// Dev-only: preset the board search query so the filtered board can be captured (see `ui::dev`).
+    pub fn dev_set_search(&mut self, query: &str) {
+        self.search = query.to_owned();
+    }
+
+    /// The active search query, trimmed and lowercased for case-insensitive matching. Empty when
+    /// no search is in effect (the board shows everything).
+    fn search_query(&self) -> String {
+        self.search.trim().to_lowercase()
     }
 
     /// Dev-only: open the ticket detail directly (no worker round-trip). `expanded` picks
@@ -174,6 +189,28 @@ impl BoardState {
             ui.heading("Tasks");
             ui.add_space(16.0);
             self.render_add_stage(ui, bridge);
+            // Search filters tickets across every column. Only offered once there are stages —
+            // an empty board has nothing to search, so the field would just be noise.
+            if !view.stages.is_empty() {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if !self.search.is_empty()
+                        && crate::ui::components::button::icon(
+                            ui,
+                            theme::icon::CLOSE,
+                            "Clear search",
+                        )
+                        .clicked()
+                    {
+                        self.search.clear();
+                    }
+                    crate::ui::components::input::text_field_sized(
+                        ui,
+                        &mut self.search,
+                        "Search tickets…",
+                        220.0,
+                    );
+                });
+            }
         });
         ui.add_space(10.0);
 

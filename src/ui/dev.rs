@@ -20,6 +20,10 @@ use crate::error::UserFacingError;
 /// Which screen to force. Selected via `DEV_VIEW={onboarding|board|ticket|page|error}`.
 #[derive(Debug, Clone, Copy)]
 pub enum DevView {
+    /// The cross-feature Overview / Home page, populated across all features.
+    Home,
+    /// The Overview with an active profile but no data yet — every section in its empty state.
+    HomeEmpty,
     Onboarding,
     /// The "new profile" create screen (opened from the switcher), over existing profiles.
     NewProfile,
@@ -63,6 +67,8 @@ pub enum DevView {
     WorktreeRemoving,
     /// The Todos tab: quick tasks, one already checked off.
     Todos,
+    /// The Tasks board with a search query active, filtering tickets across every column.
+    BoardSearch,
     /// Empty states (profile exists, but the feature has no data yet).
     BoardEmpty,
     NotesEmpty,
@@ -77,6 +83,8 @@ impl DevView {
     /// Read the `DEV_VIEW` env var. Returns `None` for a normal run.
     pub fn from_env() -> Option<Self> {
         match std::env::var("DEV_VIEW").ok()?.trim() {
+            "home" => Some(Self::Home),
+            "home-empty" => Some(Self::HomeEmpty),
             "onboarding" => Some(Self::Onboarding),
             "new-profile" => Some(Self::NewProfile),
             "profile-select" => Some(Self::ProfileSelect),
@@ -98,6 +106,7 @@ impl DevView {
             "worktree-creating" => Some(Self::WorktreeCreating),
             "worktree-removing" => Some(Self::WorktreeRemoving),
             "todos" => Some(Self::Todos),
+            "board-search" => Some(Self::BoardSearch),
             "board-empty" => Some(Self::BoardEmpty),
             "notes-empty" => Some(Self::NotesEmpty),
             "todos-empty" => Some(Self::TodosEmpty),
@@ -391,6 +400,17 @@ pub fn mock_board() -> ViewData {
         },
         todos: todos::View { todos },
     }
+}
+
+/// The Overview / Home page, populated across every feature. Reuses the mock board (stages,
+/// tickets, projects with out-of-sync repos, todos) and layers loose notes on top so all four
+/// stat tiles and every section render with real content (AGENTS.md §8).
+pub fn mock_home() -> ViewData {
+    let mut data = mock_board();
+    data.notes = notes::View {
+        notes: mock_uncategorized_notes(),
+    };
+    data
 }
 
 /// The Notes tab, populated. Reuses the mock board (so the "Create Ticket" stage picker and
