@@ -3,7 +3,7 @@
     "allow": [
       "Bash(cargo clippy:*)",
       "Bash(cargo fmt:*)",
-      "Bash(./dev-dash build:*)",
+      "Bash(./dev-dash build dev:*)",
       "Bash(./dev-dash shot:*)",
       "Bash(./dev-dash snap:*)",
       "Bash(./dev-dash sandbox:*)"

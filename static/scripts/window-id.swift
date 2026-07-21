@@ -5,8 +5,11 @@
 // dock (bottom), which can leak other apps / notifications, are never in frame (opsec).
 //
 // Reads the CoreGraphics on-screen window list and prints the id of the largest normal-layer
-// (layer 0) window owned by a process whose name contains "dev-dashboard" — i.e. the app's main
-// window, not a menu/overlay. This needs only Screen Recording permission (same as any
+// (layer 0) window owned by a process whose name contains "dashboard" (case-insensitive) — i.e.
+// the app's main window, not a menu/overlay. The match is loose on purpose: the dev binary's
+// process is "my-dev-dashboard" (from `cargo run`) but the PROD bundle's is "DevDashboard" (the
+// bundle/launcher name, §14), so a strict "dev-dashboard" match would miss the prod app entirely
+// and fall back to a full-screen grab. This needs only Screen Recording permission (same as any
 // screencapture) — NOT Accessibility — because the window list, bounds, AND titles are readable
 // with Screen Recording.
 //
@@ -29,7 +32,7 @@ guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String:
 
 var best: (Int, Double)? = nil
 for w in list {
-    guard let owner = w[kCGWindowOwnerName as String] as? String, owner.contains("dev-dashboard") else { continue }
+    guard let owner = w[kCGWindowOwnerName as String] as? String, owner.lowercased().contains("dashboard") else { continue }
     guard let layer = w[kCGWindowLayer as String] as? Int, layer == 0 else { continue }
     guard let num = w[kCGWindowNumber as String] as? Int else { continue }
     guard let b = w[kCGWindowBounds as String] as? [String: Any],

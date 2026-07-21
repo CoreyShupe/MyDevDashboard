@@ -12,9 +12,15 @@ use crate::ui::theme;
 /// A no-op in a normal or horizontal layout (`horizontal_justify()` is false there), and used only
 /// for the frame-less roles — filled pills define their own boundary and are sometimes justified on
 /// purpose (e.g. the Notes actions), so those keep `ui.add`.
+///
+/// The sub-scope is TOP-anchored (`Align::Min`), not centred: a `top_down_justified` column's
+/// `max_rect` runs to the bottom of the viewport, and a `Center` cross-alignment would centre the
+/// button vertically in ALL that leftover height — leaving a large gap above and below it (the
+/// button appears to float mid-column, e.g. the "Create worktree"/"Add child ticket" buttons on
+/// the ticket full page). Top-anchoring keeps the scope's min-rect the size of the button.
 fn add_hugging(ui: &mut Ui, button: Button) -> Response {
     if ui.layout().horizontal_justify() {
-        ui.with_layout(Layout::left_to_right(Align::Center), |ui| ui.add(button))
+        ui.with_layout(Layout::left_to_right(Align::Min), |ui| ui.add(button))
             .inner
     } else {
         ui.add(button)
