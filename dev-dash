@@ -6,7 +6,7 @@
 #     ln -s "$(pwd)/dev-dash" /usr/local/bin/dev-dash   # or ~/bin/dev-dash
 #
 # Commands:
-#     dev-dash build [prod]     Compile (debug by default; `prod` for an optimized release build).
+#     dev-dash build [dev|prod] Compile (`dev` debug build by default; `prod` for an optimized release build).
 #     dev-dash db up            Start the local PostgreSQL (persistent volume).
 #     dev-dash db down          Stop it (data preserved).
 #     dev-dash db reset         DESTROY the volume + all data (confirmation-gated).
@@ -100,9 +100,9 @@ cmd="${1:-open}"
 case "$cmd" in
   build)
     case "${2:-}" in
-      ""|debug)      exec cargo build ;;
+      ""|dev|debug)  exec cargo build ;;              # `dev` is the canonical name (matches `open` default); `debug` kept as an alias
       prod|release)  exec cargo build --release ;;  # `prod` is the canonical name (matches `open prod`); `release` kept as an alias
-      *)             echo "error: unknown build mode '${2:-}' (use 'prod' or omit)" >&2; usage 1 ;;
+      *)             echo "error: unknown build mode '${2:-}' (use 'dev' or 'prod', or omit)" >&2; usage 1 ;;
     esac
     ;;
 

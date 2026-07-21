@@ -40,7 +40,7 @@ allowlisted (it will prompt) — use the wrapper.
 | To… | Run |
 |-----|-----|
 | Compile-check while iterating | `cargo clippy` |
-| Build | `./dev-dash build`  ⟵ **not** `cargo build` |
+| Build | `./dev-dash build dev` (debug) / `./dev-dash build prod` (release)  ⟵ **not** `cargo build` |
 | Screenshot a mock screen | `./dev-dash shot VIEW static/tmp/screenshots/NAME.png` |
 | Screenshot the LIVE running app (owner's real data) | `./dev-dash snap [static/tmp/screenshots/live.png]` |
 | Launch the app detached (dev by default; `prod` for release + Restart relaunch) | `./dev-dash open [prod]` |
@@ -56,7 +56,7 @@ loading · error · error-output` (defined
 in `ui/dev.rs`; see §8). Every one has a committed screenshot under `static/screenshots/` (§11).
 **Never edit `dev-dash` itself** (trust boundary, §6).
 
-**Before you're done:** `cargo fmt` → `cargo clippy` (clean) → `./dev-dash build` → **screenshot
+**Before you're done:** `cargo fmt` → `cargo clippy` (clean) → `./dev-dash build dev` → **screenshot
 every screen you touched** (§8). No unit tests (§6). If you added a crate/feature/table/error
 variant/module, update **this file + `README.md`** in the same change (§6).
 
@@ -430,8 +430,8 @@ variant for a distinct cause.
 2. If a rule doesn't fit, add a precise sub-rule to this file **before** proceeding.
 3. **Compile-check with `cargo clippy`** (not `cargo check`) while iterating — it's pre-approved
    so it runs without a prompt. **Before done:** `cargo fmt` → `cargo clippy` (clean, no new
-   warnings) → `./dev-dash build`. Use `./dev-dash build`, **never a bare `cargo build`** (not
-   allowlisted → prompts; the wrapper is). No tests (above).
+   warnings) → `./dev-dash build dev`. Use `./dev-dash build dev` (or `prod`), **never a bare
+   `cargo build`** (not allowlisted → prompts; the wrapper is). No tests (above).
 4. **Update AGENTS.md + `README.md` in the same change** whenever you add/alter a crate,
    feature, part, table, migration, error variant, module, command, `DEV_VIEW`, or design token.
    This is the maintain-this-file rule at the top — treat it as part of "done".
@@ -456,7 +456,7 @@ stray mock, even with both on screen at once. If no matching window is found it 
 to a full-screen grab, so a capture never silently produces nothing.
 
 ```bash
-./dev-dash build                                  # compile (allowlisted; use instead of cargo build)
+./dev-dash build dev                              # compile debug (allowlisted; use instead of cargo build); `prod` for release
 ./dev-dash shot VIEW static/tmp/screenshots/NAME.png     # capture one DEV_VIEW screen, then Read the PNG
 ./dev-dash snap [static/tmp/screenshots/live.png]        # capture the ALREADY-RUNNING app (real data)
 ./dev-dash open [prod]                            # launch detached; loops on Restart (see below)

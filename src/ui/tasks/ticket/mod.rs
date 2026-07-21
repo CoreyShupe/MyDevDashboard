@@ -57,7 +57,8 @@ impl BoardState {
                             ui.set_width(title_width);
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(truncate_title(&ticket.title)).strong(),
+                                    egui::RichText::new(truncate(&ticket.title, TITLE_MAX))
+                                        .strong(),
                                 )
                                 .wrap(),
                             );
@@ -78,7 +79,7 @@ impl BoardState {
                 });
                 if !ticket.description.is_empty() {
                     ui.add_space(3.0);
-                    let preview = truncate(&ticket.description, 90);
+                    let preview = truncate(&ticket.description, DESC_PREVIEW_MAX);
                     ui.label(egui::RichText::new(preview).color(muted).size(12.5));
                 }
             });
@@ -131,29 +132,12 @@ impl BoardState {
     }
 }
 
-/// Cap a ticket title at 23 chars for the card, but break at a word boundary so a word is
-/// never sliced mid-way — back up to the last space when the cap lands inside a word (unless
-/// the very first word already exceeds the cap, where a hard cut is the only option). The
-/// card renders this wrapped, so the kept text can still flow onto a second line by its spaces.
-fn truncate_title(s: &str) -> String {
-    const MAX: usize = 23;
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= MAX {
-        return s.to_owned();
-    }
-    let capped: String = chars[..MAX].iter().collect();
-    // If the first dropped char is whitespace the cap already sits on a word boundary; else
-    // retreat to the last space so we don't cut a word in half.
-    let cut = if chars[MAX].is_whitespace() {
-        capped.trim_end()
-    } else {
-        match capped.rfind(char::is_whitespace) {
-            Some(idx) => capped[..idx].trim_end(),
-            None => capped.trim_end(), // single over-long word — hard cap
-        }
-    };
-    format!("{cut}…")
-}
+/// Char cap for the description preview on a card.
+const DESC_PREVIEW_MAX: usize = 90;
+/// Char cap for the title on a card. The title is rendered WRAPPED (like the description), so
+/// a long title flows onto extra lines and stays readable rather than being ellipsised into an
+/// unreadable single-line preview — it just gets a touch more room than the description (5 chars).
+const TITLE_MAX: usize = DESC_PREVIEW_MAX + 5;
 
 /// Truncate a string to at most `max` chars, appending an ellipsis if cut.
 fn truncate(s: &str, max: usize) -> String {
