@@ -84,18 +84,37 @@ impl ProfileService {
         Ok(profile)
     }
 
-    /// Make `id` the active profile (all others become inactive). Single-statement flip keeps
-    /// the "at most one active" index satisfied.
+    /// Make `id` the active profile (all others become inactive). Done in a transaction that
+    /// CLEARS every active row first, then sets the target — a single `SET is_active = (id = $1)`
+    /// is checked per-row by the (non-deferrable) `idx_profiles_one_active` partial index, so if
+    /// the new row is visited before the old active one is cleared, two rows are transiently
+    /// active and the update fails with a duplicate-key violation. Clearing first can't collide.
     pub async fn set_active(&self, id: Uuid) -> Result<(), AppError> {
         tracing::info!("switching active profile to {id}");
-        sqlx::query("UPDATE profiles SET is_active = (id = $1)")
+        let mut tx = self.pool.begin().await.map_err(|source| DbError::Query {
+            context: "set active profile (begin)",
+            source,
+        })?;
+        sqlx::query("UPDATE profiles SET is_active = FALSE WHERE is_active AND id <> $1")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|source| DbError::Query {
-                context: "set active profile",
+                context: "set active profile (clear)",
                 source,
             })?;
+        sqlx::query("UPDATE profiles SET is_active = TRUE WHERE id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|source| DbError::Query {
+                context: "set active profile (set)",
+                source,
+            })?;
+        tx.commit().await.map_err(|source| DbError::Query {
+            context: "set active profile (commit)",
+            source,
+        })?;
         Ok(())
     }
 

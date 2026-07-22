@@ -658,8 +658,11 @@ gated solely by the env var — never wire them into a normal run.
 How it's enforced (keep new data consistent with this):
 
 - **Exactly one — or zero — active profiles.** `profiles.is_active` (partial unique index → at
-  most one true) marks it; `ProfileService::set_active` flips it atomically with
-  `UPDATE profiles SET is_active = (id = $1)`. `create()` makes the new profile active. `active()`
+  most one true) marks it; `ProfileService::set_active` flips it in a transaction that CLEARS the
+  other active row first, THEN sets the target — a single `SET is_active = (id = $1)` is checked
+  per-row by the (non-deferrable) index, so visiting the new row before clearing the old one
+  trips a duplicate-key violation; clear-then-set can't collide. `create()` makes the new profile
+  active. `active()`
   returns ONLY the explicitly-active row (`WHERE is_active`), or `None` — it deliberately does
   NOT fall back to the oldest profile. So "no active profile" is a real state: first run (no
   profiles) OR right after the active profile was deleted.
