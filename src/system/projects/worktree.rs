@@ -195,6 +195,27 @@ impl WorktreeService {
         Ok(())
     }
 
+    /// Run the project's teardown script inside a worktree's folder right BEFORE it is removed
+    /// (e.g. `docker compose down`), if the project has one (an empty script is a no-op). The
+    /// mirror of [`run_setup`](Self::run_setup): called by the app layer as a SEPARATE step (here,
+    /// just before [`remove`](Self::remove)), so a failing teardown surfaces to the owner without
+    /// blocking the removal itself — the worktree is still torn down (AGENTS.md §10). A no-op for a
+    /// marker: its folder is already gone, so there's nothing to run the script in.
+    pub async fn run_teardown(&self, id: Uuid) -> Result<(), AppError> {
+        let row = self.row(id).await?;
+        if !row.is_live() {
+            return Ok(());
+        }
+        let (repo, script) = self
+            .project_path_and_teardown_script(row.project_id)
+            .await?;
+        if script.trim().is_empty() {
+            return Ok(());
+        }
+        git::run_teardown_script(&worktree_path(&repo, &row.name), &script).await?;
+        Ok(())
+    }
+
     /// The `(project_id, ticket_id)` a worktree row belongs to — used to key the in-flight
     /// "creating" guard when recreating (which only has the worktree id to start from).
     pub async fn ids_of(&self, id: Uuid) -> Result<(Uuid, Uuid), AppError> {
@@ -426,6 +447,31 @@ impl WorktreeService {
         .await
         .map_err(|source| DbError::Query {
             context: "load project path and setup script",
+            source,
+        })?
+        .ok_or_else(|| {
+            DbError::NotFound {
+                entity: "project",
+                id: project_id.to_string(),
+            }
+            .into()
+        })
+    }
+
+    /// A project's repository path AND its teardown script (both needed to tear down a worktree),
+    /// fetched together in one round-trip. Mirror of [`project_path_and_script`](Self::project_path_and_script).
+    async fn project_path_and_teardown_script(
+        &self,
+        project_id: Uuid,
+    ) -> Result<(String, String), AppError> {
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT path, teardown_script FROM projects WHERE id = $1",
+        )
+        .bind(project_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|source| DbError::Query {
+            context: "load project path and teardown script",
             source,
         })?
         .ok_or_else(|| {

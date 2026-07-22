@@ -50,8 +50,8 @@ impl ProjectService {
     /// All projects in a profile, newest first (most-recently added on top).
     pub async fn list(&self, profile_id: Uuid) -> Result<Vec<Project>, DbError> {
         sqlx::query_as::<_, Project>(
-            "SELECT id, profile_id, name, path, setup_script, created_at, updated_at FROM projects \
-             WHERE profile_id = $1 ORDER BY created_at DESC",
+            "SELECT id, profile_id, name, path, setup_script, teardown_script, created_at, updated_at \
+             FROM projects WHERE profile_id = $1 ORDER BY created_at DESC",
         )
         .bind(profile_id)
         .fetch_all(&self.pool)
@@ -99,7 +99,7 @@ impl ProjectService {
 
         let project = sqlx::query_as::<_, Project>(
             "INSERT INTO projects (id, profile_id, name, path) VALUES ($1, $2, $3, $4) \
-             RETURNING id, profile_id, name, path, setup_script, created_at, updated_at",
+             RETURNING id, profile_id, name, path, setup_script, teardown_script, created_at, updated_at",
         )
         .bind(Uuid::new_v4())
         .bind(profile_id)
@@ -219,6 +219,33 @@ impl ProjectService {
                     source,
                 })?
                 .rows_affected();
+
+        if affected == 0 {
+            return Err(DbError::NotFound {
+                entity: "project",
+                id: id.to_string(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    /// Set (or clear, when empty) a project's teardown script — the bash run inside each worktree
+    /// right before it's removed (AGENTS.md §10). Stored verbatim; it's only ever executed on
+    /// worktree removal, never here. Mirror of [`set_setup_script`](Self::set_setup_script).
+    pub async fn set_teardown_script(&self, id: Uuid, script: &str) -> Result<(), AppError> {
+        let affected = sqlx::query(
+            "UPDATE projects SET teardown_script = $2, updated_at = now() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(script)
+        .execute(&self.pool)
+        .await
+        .map_err(|source| DbError::Query {
+            context: "update project teardown script",
+            source,
+        })?
+        .rows_affected();
 
         if affected == 0 {
             return Err(DbError::NotFound {

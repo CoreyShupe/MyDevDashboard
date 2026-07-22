@@ -40,7 +40,8 @@ impl NewWorktreeModal {
     }
 }
 
-/// The right column of the project detail page: this project's LIVE worktrees only. Removed
+/// The worktrees band of the project detail page (full-width, below the script pair): this
+/// project's LIVE worktrees only. Removed
 /// (recreatable) markers are deliberately NOT shown here — they live on the ticket they originate
 /// from, which owns recreation; the project view is just "what's checked out right now". Live rows
 /// open in VS Code or remove.

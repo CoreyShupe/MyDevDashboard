@@ -35,16 +35,98 @@ impl NewProjectModal {
     }
 }
 
-/// Draft state for the open "edit setup script" modal — the project being edited and the working
-/// copy of its bash script (run inside each new worktree, §10).
-pub(super) struct SetupScriptModal {
+/// Which per-worktree bash script an editor/section is for. Setup and teardown are the same
+/// primitive (a project-level script run inside a worktree's dir, §10) differing only in *when*
+/// they run — setup on creation, teardown right before removal — and their copy, so one modal +
+/// one section renderer are parameterised by this rather than duplicated (AGENTS.md §4).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScriptKind {
+    Setup,
+    Teardown,
+}
+
+impl ScriptKind {
+    /// The script's current text on a project.
+    fn value(self, p: &crate::domain::projects::Project) -> &str {
+        match self {
+            Self::Setup => &p.setup_script,
+            Self::Teardown => &p.teardown_script,
+        }
+    }
+
+    /// The `projects::Event` that persists this kind of script.
+    fn set_event(self, id: Uuid, script: String) -> crate::app::projects::Event {
+        match self {
+            Self::Setup => crate::app::projects::Event::set_setup_script(id, script),
+            Self::Teardown => crate::app::projects::Event::set_teardown_script(id, script),
+        }
+    }
+
+    /// Section/modal title.
+    fn title(self) -> &'static str {
+        match self {
+            Self::Setup => "Setup script",
+            Self::Teardown => "Teardown script",
+        }
+    }
+
+    /// One-line description for the detail-page section.
+    fn section_desc(self) -> &'static str {
+        match self {
+            Self::Setup => {
+                "Runs as a bash script inside each new worktree (e.g. `bun install`). Optional."
+            }
+            Self::Teardown => {
+                "Runs as a bash script inside each worktree just before it's removed \
+                 (e.g. `docker compose down`). Optional."
+            }
+        }
+    }
+
+    /// The italic placeholder shown in the section's inset when no script is set.
+    fn empty_hint(self) -> &'static str {
+        match self {
+            Self::Setup => "No setup script — new worktrees are left as-is.",
+            Self::Teardown => "No teardown script — worktrees are removed as-is.",
+        }
+    }
+
+    /// The modal's body copy (parameterised by the project name).
+    fn modal_desc(self, name: &str) -> String {
+        match self {
+            Self::Setup => format!(
+                "Runs as a bash script in the working directory of every new worktree for \
+                 “{name}” — e.g. `bun install`. Optional: leave it empty for no setup.",
+            ),
+            Self::Teardown => format!(
+                "Runs as a bash script in the working directory of each worktree for “{name}” \
+                 just before it's removed — e.g. `docker compose down`. Optional: leave it empty \
+                 for no teardown.",
+            ),
+        }
+    }
+
+    /// The text-area placeholder inside the modal.
+    fn placeholder(self) -> &'static str {
+        match self {
+            Self::Setup => "bun install",
+            Self::Teardown => "docker compose down",
+        }
+    }
+}
+
+/// Draft state for the open "edit script" modal — which script (setup/teardown), the project being
+/// edited, and the working copy of its bash text.
+pub(super) struct ScriptModal {
+    kind: ScriptKind,
     project_id: Uuid,
     draft: String,
 }
 
-impl SetupScriptModal {
-    pub(super) fn new(project_id: Uuid, current: &str) -> Self {
+impl ScriptModal {
+    pub(super) fn new(kind: ScriptKind, project_id: Uuid, current: &str) -> Self {
         Self {
+            kind,
             project_id,
             draft: current.to_owned(),
         }
@@ -159,7 +241,7 @@ impl ProjectsState {
         ui.add_space(10.0);
 
         let mut delete = false;
-        let mut edit_setup_script = false;
+        let mut edit_script: Option<ScriptKind> = None;
         let mut wt_actions = worktree::RowActions::default();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -188,38 +270,58 @@ impl ProjectsState {
                 });
                 ui.add_space(12.0);
 
-                // Two full-width columns: metadata pinned left, worktrees pinned right, with a
-                // wide gap between (matching the ticket full-page layout).
-                ui.spacing_mut().item_spacing.x = 40.0;
+                // The page reads as full-width horizontal bands, not scattered boxes: a metadata
+                // band (Repository | Git status), then the two scripts as a matched pair (Setup |
+                // Teardown — the create/remove counterparts, §10), then the worktrees full-width,
+                // then the danger delete at the foot. Each paired band is a 2-column row with a
+                // wide gap; both scripts optional, last edit-click wins if both somehow fire.
+                let gap = 40.0;
+
+                ui.spacing_mut().item_spacing.x = gap;
                 ui.columns(2, |cols| {
                     cols[0].spacing_mut().item_spacing.x = 8.0;
-                    delete = render_meta(&mut cols[0], c, projects.refreshing);
-
+                    render_repository(&mut cols[0], c);
                     cols[1].spacing_mut().item_spacing.x = 8.0;
-                    // Setup script sits ABOVE the worktrees, in the same column — it governs what
-                    // runs whenever a worktree here is created (§10). Optional — empty = no setup.
-                    edit_setup_script = render_setup_script_section(&mut cols[1], c);
-                    cols[1].add_space(16.0);
-                    worktree::render_project_worktrees(
-                        &mut cols[1],
-                        bridge,
-                        id,
-                        projects,
-                        tasks,
-                        &mut wt_actions,
-                    );
+                    render_git_status(&mut cols[1], c, projects.refreshing);
                 });
+
+                ui.add_space(18.0);
+                ui.spacing_mut().item_spacing.x = gap;
+                ui.columns(2, |cols| {
+                    cols[0].spacing_mut().item_spacing.x = 8.0;
+                    if render_script_section(&mut cols[0], c, ScriptKind::Setup) {
+                        edit_script = Some(ScriptKind::Setup);
+                    }
+                    cols[1].spacing_mut().item_spacing.x = 8.0;
+                    if render_script_section(&mut cols[1], c, ScriptKind::Teardown) {
+                        edit_script = Some(ScriptKind::Teardown);
+                    }
+                });
+
+                ui.add_space(18.0);
+                worktree::render_project_worktrees(
+                    ui,
+                    bridge,
+                    id,
+                    projects,
+                    tasks,
+                    &mut wt_actions,
+                );
+
+                ui.add_space(18.0);
+                delete = button::danger(ui, &format!("{} Delete project", theme::icon::DELETE))
+                    .clicked();
             });
 
         if delete {
             self.confirm_delete_project = Some(id);
         }
-        if edit_setup_script {
+        if let Some(kind) = edit_script {
             let current = projects
                 .project(id)
-                .map(|c| c.project.setup_script.clone())
+                .map(|c| kind.value(&c.project).to_owned())
                 .unwrap_or_default();
-            self.editing_setup_script = Some(SetupScriptModal::new(id, &current));
+            self.editing_script = Some(ScriptModal::new(kind, id, &current));
         }
         if let Some(worktree_id) = wt_actions.remove {
             self.confirm_remove_worktree = Some(worktree_id);
@@ -356,17 +458,19 @@ impl ProjectsState {
         }
     }
 
-    /// The "edit setup script" modal: a multi-line bash editor for the script run inside each new
-    /// worktree (§10). Save persists it (even when emptied — that clears it); Cancel discards.
-    pub(super) fn render_setup_script_modal(
+    /// The "edit script" modal: a multi-line bash editor for a project's setup OR teardown script
+    /// (which one is carried on the open `ScriptModal`, §10). Save persists it (even when emptied —
+    /// that clears it); Cancel discards.
+    pub(super) fn render_script_modal(
         &mut self,
         ctx: &egui::Context,
         bridge: &Bridge,
         projects: &ProjectsView,
     ) {
-        let Some(draft) = self.editing_setup_script.as_mut() else {
+        let Some(draft) = self.editing_script.as_mut() else {
             return;
         };
+        let kind = draft.kind;
         let project_id = draft.project_id();
         let name = projects
             .project(project_id)
@@ -376,25 +480,22 @@ impl ProjectsState {
         let mut save = false;
         let mut cancel = false;
 
-        let response = egui::Modal::new(egui::Id::new(("setup_script_modal", project_id)))
+        let response = egui::Modal::new(egui::Id::new(("script_modal", project_id)))
             .frame(theme::surface_frame())
             .show(ctx, |ui| {
                 ui.set_min_width(560.0);
-                ui.heading("Setup script");
+                ui.heading(kind.title());
                 ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new(format!(
-                        "Runs as a bash script in the working directory of every new worktree for \
-                         “{name}” — e.g. `bun install`. Optional: leave it empty for no setup.",
-                    ))
-                    .color(muted)
-                    .size(12.5),
+                    egui::RichText::new(kind.modal_desc(&name))
+                        .color(muted)
+                        .size(12.5),
                 );
                 ui.add_space(12.0);
                 // No shebang in the placeholder: the script is executed with `bash -c <script>`
-                // (system::projects::git::run_setup_script), so a `#!/usr/bin/env bash` line would
-                // just be an inert comment — bash is already the interpreter.
-                input::text_area(ui, draft.script_mut(), "bun install", 12);
+                // (system::projects::git::run_script), so a `#!/usr/bin/env bash` line would just
+                // be an inert comment — bash is already the interpreter.
+                input::text_area(ui, draft.script_mut(), kind.placeholder(), 12);
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
                     save = button::primary(ui, &format!("{} Save", theme::icon::SAVE)).clicked();
@@ -407,13 +508,10 @@ impl ProjectsState {
         }
 
         if save {
-            bridge.send(crate::app::projects::Event::set_setup_script(
-                project_id,
-                draft.script_mut().clone(),
-            ));
-            self.editing_setup_script = None;
+            bridge.send(kind.set_event(project_id, draft.script_mut().clone()));
+            self.editing_script = None;
         } else if cancel {
-            self.editing_setup_script = None;
+            self.editing_script = None;
         }
     }
 }
@@ -572,19 +670,20 @@ fn git_badge(ui: &mut egui::Ui, git: &GitStatus, loading: bool) {
     );
 }
 
-/// The full-width setup-script panel on the detail page, above the worktrees. Shows the current
-/// script (or a muted "no script" hint) and an Edit button. Returns true if Edit was clicked.
-fn render_setup_script_section(ui: &mut egui::Ui, c: &ProjectCard) -> bool {
+/// A full-width script panel on the detail page — used for both the setup script (left column) and
+/// the teardown script (right column, atop the worktrees), selected by `kind`. Shows the current
+/// script (or a muted "no script" hint) and an Edit button. Returns true if Edit/Add was clicked.
+fn render_script_section(ui: &mut egui::Ui, c: &ProjectCard, kind: ScriptKind) -> bool {
     let p = theme::palette();
-    let script = c.project.setup_script.trim();
+    let script = kind.value(&c.project);
+    let script = script.trim();
+    let noun = kind.title().to_lowercase(); // "setup script" / "teardown script"
 
-    section_label(ui, "Setup script");
+    section_label(ui, kind.title());
     ui.label(
-        egui::RichText::new(
-            "Runs as a bash script inside each new worktree (e.g. `bun install`). Optional.",
-        )
-        .color(p.muted)
-        .size(12.0),
+        egui::RichText::new(kind.section_desc())
+            .color(p.muted)
+            .size(12.0),
     );
     ui.add_space(8.0);
 
@@ -592,7 +691,7 @@ fn render_setup_script_section(ui: &mut egui::Ui, c: &ProjectCard) -> bool {
         ui.set_width(ui.available_width());
         if script.is_empty() {
             ui.label(
-                egui::RichText::new("No setup script — new worktrees are left as-is.")
+                egui::RichText::new(kind.empty_hint())
                     .color(p.muted)
                     .italics(),
             );
@@ -604,25 +703,26 @@ fn render_setup_script_section(ui: &mut egui::Ui, c: &ProjectCard) -> bool {
     ui.add_space(8.0);
 
     let label = if script.is_empty() {
-        format!("{} Add setup script", theme::icon::EDIT)
+        format!("{} Add {noun}", theme::icon::EDIT)
     } else {
-        format!("{} Edit setup script", theme::icon::EDIT)
+        format!("{} Edit {noun}", theme::icon::EDIT)
     };
     button::secondary(ui, &label).clicked()
 }
 
-/// Left column of the detail page: repository metadata, git status detail, and delete. Returns
-/// true if "Delete project" was clicked. `refreshing` swaps the git status for a loading line
-/// while a background fetch is in flight.
-fn render_meta(ui: &mut egui::Ui, c: &ProjectCard, refreshing: bool) -> bool {
-    let p = theme::palette();
-
+/// The repository identity — the left half of the top metadata band (path / origin / branch).
+fn render_repository(ui: &mut egui::Ui, c: &ProjectCard) {
     section_label(ui, "Repository");
     field(ui, "Path", &c.project.path);
     field(ui, "Origin", c.git.origin_url.as_deref().unwrap_or("—"));
     field(ui, "Branch", c.git.branch.as_deref().unwrap_or("—"));
+}
 
-    ui.add_space(6.0);
+/// The git-status detail — the right half of the top metadata band. `refreshing` swaps it for a
+/// loading line while a background fetch is in flight.
+fn render_git_status(ui: &mut egui::Ui, c: &ProjectCard, refreshing: bool) {
+    let p = theme::palette();
+
     section_label(ui, "Git status");
     if refreshing {
         ui.horizontal(|ui| {
@@ -671,9 +771,6 @@ fn render_meta(ui: &mut egui::Ui, c: &ProjectCard, refreshing: bool) -> bool {
             );
         }
     }
-
-    ui.add_space(16.0);
-    button::danger(ui, &format!("{} Delete project", theme::icon::DELETE)).clicked()
 }
 
 /// A short "N ahead · M behind · uncommitted" phrase for an out-of-sync repo.

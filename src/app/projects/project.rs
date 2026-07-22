@@ -14,6 +14,9 @@ pub enum Command {
     Delete { id: Uuid },
     /// Set (or clear) a project's setup script — the bash run inside each new worktree (§10).
     SetSetupScript { id: Uuid, script: String },
+    /// Set (or clear) a project's teardown script — the bash run inside each worktree right
+    /// before it's removed (§10).
+    SetTeardownScript { id: Uuid, script: String },
     /// Refetch live git status for the active profile's projects (AGENTS.md §10).
     RefreshStatus,
     /// `git pull --rebase origin <branch>` for one project on a shared branch, then refetch just
@@ -30,6 +33,9 @@ impl Command {
     }
     pub fn set_setup_script(id: Uuid, script: String) -> Self {
         Self::SetSetupScript { id, script }
+    }
+    pub fn set_teardown_script(id: Uuid, script: String) -> Self {
+        Self::SetTeardownScript { id, script }
     }
     pub fn refresh_status() -> Self {
         Self::RefreshStatus
@@ -75,6 +81,19 @@ pub async fn handle(backend: &Backend, emitter: &Emitter, cmd: Command) {
                 .settle(
                     backend,
                     backend.projects.project.set_setup_script(id, &script).await,
+                )
+                .await;
+        }
+        // Same as the setup script: persist verbatim; it only runs later, on worktree removal (§10).
+        Command::SetTeardownScript { id, script } => {
+            emitter
+                .settle(
+                    backend,
+                    backend
+                        .projects
+                        .project
+                        .set_teardown_script(id, &script)
+                        .await,
                 )
                 .await;
         }

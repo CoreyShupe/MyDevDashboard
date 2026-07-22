@@ -42,6 +42,9 @@ impl Event {
     pub fn set_setup_script(id: Uuid, script: String) -> Self {
         Self::Project(project::Command::set_setup_script(id, script))
     }
+    pub fn set_teardown_script(id: Uuid, script: String) -> Self {
+        Self::Project(project::Command::set_teardown_script(id, script))
+    }
     pub fn create_worktree(project_id: Uuid, ticket_id: Uuid, branch: String) -> Self {
         Self::Worktree(worktree::Command::create(project_id, ticket_id, branch))
     }
@@ -228,13 +231,19 @@ pub fn spawn_pull(backend: &Backend, emitter: &Emitter, id: Uuid) {
     });
 }
 
-/// Kick off a non-blocking worktree **removal** (AGENTS.md §10). `git worktree remove` shells out,
-/// so — like create — it's spawned off the worker loop with a "waiting" state rather than awaited
+/// Kick off a non-blocking worktree **removal** (AGENTS.md §10). Runs the project's teardown script
+/// (if any) FIRST — while the folder still exists — then `git worktree remove`; both shell out, so
+/// — like create — this is spawned off the worker loop with a "waiting" state rather than awaited
 /// inline. Claims the per-worktree busy guard first (a double-click is a no-op), emits the loading
 /// snapshot, THEN spawns; snapshotting before the spawn guarantees the loading state reaches the UI
 /// before the (possibly quick) clearing snapshot, so the spinner can't get stuck on. `settle_reload`
 /// always re-snapshots (clearing the busy state) and surfaces any error — a `git` refusal (dirty
 /// tree) leaves the worktree live and shows the error.
+///
+/// A failing teardown is NON-fatal, mirroring setup: the removal still proceeds (so a broken
+/// teardown can't strand a worktree the owner asked to remove), and the teardown error is surfaced
+/// only when the removal itself succeeded — a git refusal takes precedence, since then the worktree
+/// is still live and that's the actionable failure.
 pub async fn spawn_worktree_remove(backend: &Backend, emitter: &Emitter, id: Uuid) {
     if !backend
         .projects
@@ -247,9 +256,13 @@ pub async fn spawn_worktree_remove(backend: &Backend, emitter: &Emitter, id: Uui
     let backend = backend.clone();
     let emitter = emitter.clone();
     tokio::spawn(async move {
-        let result = backend.projects.worktree.remove(id).await;
+        // Teardown runs before the folder is deleted; keep its result aside and remove regardless.
+        let teardown = backend.projects.worktree.run_teardown(id).await;
+        let removed = backend.projects.worktree.remove(id).await;
         backend.projects.worktree.end_busy(id);
-        emitter.settle_reload(&backend, result).await;
+        // Removal failure is fatal (the worktree stays live) and wins; otherwise surface any
+        // teardown failure, which didn't stop the removal but the owner should still see.
+        emitter.settle_reload(&backend, removed.and(teardown)).await;
     });
 }
 

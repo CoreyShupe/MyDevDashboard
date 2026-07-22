@@ -18,6 +18,9 @@ pub struct Project {
     /// A bash script run inside each freshly-created worktree (e.g. `bun install`) so a new
     /// worktree is ready to work in (AGENTS.md §10). Empty = no setup script.
     pub setup_script: String,
+    /// A bash script run inside each worktree right before it is removed (e.g. `docker compose
+    /// down`) so removal tears down whatever setup stood up (AGENTS.md §10). Empty = no teardown.
+    pub teardown_script: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

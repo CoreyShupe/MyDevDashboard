@@ -7,9 +7,9 @@
 //!   or a `git fetch` that can't reach the network simply leaves fields empty/false. A single
 //!   broken project must never fail the whole snapshot.
 //! - **Explicit actions surface errors.** [`worktree_add`], [`worktree_remove`],
-//!   [`run_setup_script`], and [`open_in_vscode`] return a typed [`ProcessError`] the UI shows in
-//!   a modal, because the owner asked for the action and needs to know precisely why it didn't
-//!   happen.
+//!   [`run_setup_script`], [`run_teardown_script`], and [`open_in_vscode`] return a typed
+//!   [`ProcessError`] the UI shows in a modal, because the owner asked for the action and needs to
+//!   know precisely why it didn't happen.
 //!
 //! Committing / pushing are deliberately NOT here — the owner runs those by hand so the exact
 //! commands are theirs to control (AGENTS.md §10). The ONE exception is a constrained
@@ -193,6 +193,35 @@ pub async fn worktree_remove(repo: &str, path: &Path) -> Result<(), ProcessError
 /// carrying the script's own stderr (unlike best-effort status reads). Callers only invoke this
 /// for a non-empty script; an empty one means "no setup" and never shells out (AGENTS.md §10).
 pub async fn run_setup_script(dir: &Path, script: &str) -> Result<(), ProcessError> {
+    run_script(dir, script, "setup", "running the project setup script").await
+}
+
+/// Run a project's **teardown script** as bash, with `dir` (the worktree being removed) as the
+/// working directory — the mirror of [`run_setup_script`], run right BEFORE the folder is deleted
+/// so it can tear down whatever setup stood up (e.g. `docker compose down`). Same failure policy:
+/// a non-zero exit surfaces a typed [`ProcessError`] carrying the script's own stderr. Callers only
+/// invoke this for a non-empty script on a live worktree; an empty one is a no-op (AGENTS.md §10).
+pub async fn run_teardown_script(dir: &Path, script: &str) -> Result<(), ProcessError> {
+    run_script(
+        dir,
+        script,
+        "teardown",
+        "running the project teardown script",
+    )
+    .await
+}
+
+/// Shared runner for a project's per-worktree bash scripts (setup on create, teardown on remove).
+/// `kind` ("setup"/"teardown") only labels the run-log headers; `context` is the [`ProcessError`]
+/// context on a non-zero exit. Factored so setup and teardown share the PATH resolution, logging,
+/// and error handling — they're the same primitive run at different points in a worktree's life
+/// (AGENTS.md §10).
+async fn run_script(
+    dir: &Path,
+    script: &str,
+    kind: &str,
+    context: &'static str,
+) -> Result<(), ProcessError> {
     // Resolve the owner's real login-shell PATH so tools they installed via their shell profile
     // (`bun` in `~/.bun/bin`, `cargo`, Homebrew, pnpm, …) are found. Without this a script launched
     // from a Finder/`.app` process only sees the minimal launchd PATH and fails with
@@ -200,11 +229,11 @@ pub async fn run_setup_script(dir: &Path, script: &str) -> Result<(), ProcessErr
     let shell_path = login_shell_path().await;
     // Log a HEADER before running, so if the script hangs or exits early the run log
     // (`~/.dev-dash/log.txt`, see `crate::logging`) still records exactly what was about to run
-    // and where — the prod-debug trail for "did my setup script even start?". The PATH is logged
+    // and where — the prod-debug trail for "did my script even start?". The PATH is logged
     // too, since a "command not found" is almost always a PATH problem.
     tracing::info!(
-        "setup script starting\n\
-         ── setup script ──────────────────────────────────────────────\n\
+        "{kind} script starting\n\
+         ── {kind} script ─────────────────────────────────────────────\n\
          dir: {}\n\
          PATH: {}\n\
          {}\n\
@@ -234,22 +263,22 @@ pub async fn run_setup_script(dir: &Path, script: &str) -> Result<(), ProcessErr
     let code = output.status.code();
     if output.status.success() {
         tracing::info!(
-            "setup script finished (exit {code:?})\n\
-             ── setup output ──────────────────────────────────────────────\n\
+            "{kind} script finished (exit {code:?})\n\
+             ── {kind} output ─────────────────────────────────────────────\n\
              [stdout]\n{stdout}\n[stderr]\n{stderr}\n\
              ──────────────────────────────────────────────────────────────",
         );
         Ok(())
     } else {
         tracing::error!(
-            "setup script FAILED (exit {code:?})\n\
-             ── setup output ──────────────────────────────────────────────\n\
+            "{kind} script FAILED (exit {code:?})\n\
+             ── {kind} output ─────────────────────────────────────────────\n\
              [stdout]\n{stdout}\n[stderr]\n{stderr}\n\
              ──────────────────────────────────────────────────────────────",
         );
         Err(ProcessError::Exited {
             program: "bash".to_owned(),
-            context: "running the project setup script",
+            context,
             stderr: stderr_of(&output.stderr),
         })
     }
@@ -280,8 +309,8 @@ pub async fn open_in_vscode(path: &Path) -> Result<(), ProcessError> {
     }
 }
 
-/// Resolve the owner's interactive-login-shell `PATH`, so a **setup script** launched from a GUI/
-/// Finder process (which starts with only the minimal launchd PATH — `/usr/bin:/bin:…`) can still
+/// Resolve the owner's interactive-login-shell `PATH`, so a **setup/teardown script** launched from
+/// a GUI/Finder process (which starts with only the minimal launchd PATH — `/usr/bin:/bin:…`) can still
 /// find tools they installed under `~/.bun/bin`, `~/.cargo/bin`, Homebrew, nvm, pnpm, etc. Those
 /// PATH entries live in `~/.zshrc`/`~/.zprofile`, which a plain `bash -c` never sources — so we run
 /// the owner's `$SHELL` as a **login + interactive** shell (which does source them) and read back

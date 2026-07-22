@@ -59,6 +59,9 @@ pub enum DevView {
     Project,
     /// A project's detail page with the "edit setup script" modal open (the per-worktree bash).
     SetupScript,
+    /// A project's detail page with the "edit teardown script" modal open (run before a worktree
+    /// is removed).
+    TeardownScript,
     /// The ticket detail (full page) with a worktree being provisioned — its setup-script spinner
     /// showing, so the worktree isn't yet presented as ready (§10).
     WorktreeCreating,
@@ -103,6 +106,7 @@ impl DevView {
             "add-project" => Some(Self::AddProject),
             "project" => Some(Self::Project),
             "setup-script" => Some(Self::SetupScript),
+            "teardown-script" => Some(Self::TeardownScript),
             "worktree-creating" => Some(Self::WorktreeCreating),
             "worktree-removing" => Some(Self::WorktreeRemoving),
             "todos" => Some(Self::Todos),
@@ -253,26 +257,29 @@ pub fn mock_board() -> ViewData {
     // Projects + worktrees, exercising the grid states (up-to-date, out-of-sync, no-origin) and
     // the worktree section on the ticket detail (a ticket with two shared-branch worktrees plus
     // a removed marker). Worktrees link to real mock tickets so titles resolve.
-    let project = |name: &str, path: &str, setup_script: &str| Project {
+    let project = |name: &str, path: &str, setup_script: &str, teardown_script: &str| Project {
         id: Uuid::new_v4(),
         profile_id: work_id,
         name: name.to_owned(),
         path: path.to_owned(),
         setup_script: setup_script.to_owned(),
+        teardown_script: teardown_script.to_owned(),
         created_at: now,
         updated_at: now,
     };
-    // One project carries a setup script (run inside each new worktree, §10) so the project
-    // detail + setup-script editor render populated; the rest have none (the common case).
+    // One project carries both a setup and a teardown script (run inside each new/removed worktree,
+    // §10) so the project detail + script editors render populated; the rest have none (the common
+    // case).
     let dashboard = project(
         "my-dev-dashboard",
         "/Users/you/Programming/MyDevDashboard",
-        // No shebang: setup scripts run via `bash -c <script>`, so one would be an inert comment.
+        // No shebang: scripts run via `bash -c <script>`, so one would be an inert comment.
         "set -euo pipefail\n\nbun install\nbun run build",
+        "set -euo pipefail\n\ndocker compose down",
     );
-    let webapp = project("acme-web", "/Users/you/Programming/acme-web", "");
-    let api = project("acme-api", "/Users/you/Programming/acme-api", "");
-    let scratch = project("scratchpad", "/Users/you/Programming/scratchpad", "");
+    let webapp = project("acme-web", "/Users/you/Programming/acme-web", "", "");
+    let api = project("acme-api", "/Users/you/Programming/acme-api", "", "");
+    let scratch = project("scratchpad", "/Users/you/Programming/scratchpad", "", "");
     let projects_cards = vec![
         // Shared branch (main) that's behind & clean → the one-click Pull button shows (§10).
         ProjectCard {

@@ -51,8 +51,8 @@ allowlisted (it will prompt) — use the wrapper.
 `VIEW` ∈ `home · home-empty · onboarding · new-profile · profile-select · board · board-empty ·
 board-search · ticket · page · create · stage-edit · confirm-delete · notes · notes-empty ·
 notes-file · todos · todos-empty · projects · projects-empty · projects-loading ·
-projects-pulling · add-project · project · setup-script · worktree-creating · worktree-removing ·
-loading · error · error-output` (defined
+projects-pulling · add-project · project · setup-script · teardown-script · worktree-creating ·
+worktree-removing · loading · error · error-output` (defined
 in `ui/dev.rs`; see §8). Every one has a committed screenshot under `static/screenshots/` (§11).
 **Never edit `dev-dash` itself** (trust boundary, §6).
 
@@ -178,7 +178,7 @@ src/
 │   ├── notes/              NotesService — CRUD for the `uncategorized_notes` table.
 │   ├── projects/           mod.rs `ProjectsService` = { project, worktree }; git.rs = the ONE
 │   │                       external-command boundary (git reads/worktree ops + editor launch +
-│   │                       per-worktree setup-script run, §10).
+│   │                       per-worktree setup-/teardown-script run, §10).
 │   └── todos/              TodosService — CRUD + `set_done` for the `todos` table.
 │
 ├── app/                The BRIDGE + orchestration root. Root dispatch lives here.
@@ -193,7 +193,8 @@ src/
 │   ├── projects/           mod.rs dispatches to parts: project/worktree::{Command, handle()}.
 │   │                       `View` = projects (with live GitStatus) + all worktrees + the
 │   │                       in-flight worktree-provision set (`creating`). Off-loop worktree
-│   │                       create/recreate + setup-script run spawned here (§10).
+│   │                       create/recreate (+ setup script) and remove (+ teardown script)
+│   │                       spawned here (§10).
 │   └── todos/              todos::{Event, View, handle()} — add / set_done / delete.
 │
 └── ui/                 PURE rendering. No DB. One folder per feature + the shell + kit.
@@ -209,9 +210,9 @@ src/
     ├── tasks/              mod.rs board (+ live ticket SEARCH box) + part renderers: stage.rs,
     │                       ticket.rs, note.rs, modal.rs.
     ├── notes/              Notes tab: composer + note rows + the "Add to ticket" picker.
-    ├── projects/           Projects tab: card grid, project detail page (setup-script section +
-    │                       live worktree rows), worktree loading/rows + add-project /
-    │                       create-worktree / edit-setup-script modals.
+    ├── projects/           Projects tab: card grid, project detail page (setup- + teardown-script
+    │                       sections + live worktree rows), worktree loading/rows + add-project /
+    │                       create-worktree / edit-script modals (one modal for both scripts).
     └── todos/              Todos tab: composer + open-todo rows (done checkbox + delete).
 ```
 (`static/assets/fonts/Nunito.ttf` — SIL OFL, embedded via `include_bytes!`. Not a crate.)
@@ -593,8 +594,9 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 | `projects-loading` | Projects tab mid-refresh — cards + header show the git-status spinner |
 | `projects-pulling` | Projects tab with a one-click Pull in flight — the card's "Pulling…" spinner |
 | `add-project`    | The "add project" modal over the grid (native folder picker + name) |
-| `project`        | A project's full-page detail (metadata + setup script + worktrees) |
-| `setup-script`   | The "edit setup script" modal over the project detail (per-worktree bash) |
+| `project`        | A project's full-page detail (metadata + setup + teardown scripts + worktrees) |
+| `setup-script`   | The "edit setup script" modal over the project detail (per-worktree bash, run on create) |
+| `teardown-script`| The "edit teardown script" modal over the project detail (per-worktree bash, run on remove) |
 | `worktree-creating` | Ticket detail with a worktree mid-provision — its setup-script spinner |
 | `worktree-removing` | Project detail with a live worktree being removed — its "Removing…" spinner |
 | `loading`        | The pre-first-snapshot loading screen (spinner before any data arrives) |
@@ -602,8 +604,9 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 | `error-output`   | The error modal for a failed external command — shows the process's raw stderr in a monospace block |
 
 (The `board`/`ticket`/`page` mocks also carry projects + worktrees, so the ticket detail's
-worktree section renders under `DEV_VIEW=ticket`/`page`; one mock project carries a setup script
-so the `project`/`setup-script` views render it populated. The `*-empty` views (incl.
+worktree section renders under `DEV_VIEW=ticket`/`page`; one mock project carries both a setup and
+a teardown script so the `project`/`setup-script`/`teardown-script` views render it populated. The
+`*-empty` views (incl.
 `home-empty`) share one `dev::mock_empty()` — a profile with no feature data — differing only by
 active tab. The `home` view uses `dev::mock_home()` = the `board` mock + loose notes, so all four
 Overview tiles and every section render with content.)
@@ -787,11 +790,15 @@ dashboard. A worktree is tied **1:1 to a ticket** within a project:
 **Setup script (per project, run on worktree creation).** A project carries an optional
 `setup_script` (a `TEXT` column on `projects`, empty = none) — a bash script run in the working
 directory of every **freshly-provisioned** worktree, so a new checkout is ready to work in (e.g.
-`bun install`). Edited via a modal on the project detail (`SetSetupScript` → `set_setup_script`),
-shown ABOVE the worktrees in that column. Rules:
+`bun install`). Edited via a modal on the project detail (`SetSetupScript` → `set_setup_script`).
+The detail page reads as full-width bands — a `Repository | Git status` metadata row, then the two
+scripts as a matched `Setup | Teardown` pair, then the worktrees full-width, then delete — so setup
+and teardown sit side-by-side rather than stacked (`render_script_section` renders either, by kind).
+Rules:
 - **Runs on a fresh provision only** — a first-time create OR a recreate (removal deleted the
   folder), never on an ADOPTED existing folder (that was already set up). `git::run_setup_script`
-  is the boundary: `bash -c <script>` in the worktree dir, a typed `ProcessError` on non-zero exit.
+  is the boundary — a thin wrapper over the shared `git::run_script` (which teardown also uses):
+  `bash -c <script>` in the worktree dir, a typed `ProcessError` on non-zero exit.
   Because it's `bash -c`, the script needs **no shebang** — a `#!/usr/bin/env bash` first line would
   be an inert comment (bash is already the interpreter), so don't put one in examples/placeholders.
   It also logs a header (cwd + the exact script + the PATH used) and the full captured stdout/stderr
@@ -818,14 +825,34 @@ shown ABOVE the worktrees in that column. Rules:
   (`worktree::run_setup`) AFTER `create`/`recreate` return `(Worktree, fresh)`, not inside
   `provision`, so it can't roll back an already-created worktree.
 
+**Teardown script (per project, run on worktree removal).** The mirror of the setup script: a
+project carries an optional `teardown_script` (a `TEXT` column on `projects`, empty = none) — a bash
+script run in the working directory of a worktree **right before it is removed**, so removal cleans
+up whatever setup (or the owner) stood up (e.g. `docker compose down`, stop a dev server). Edited via
+the SAME editor component on the project detail (`SetTeardownScript` → `set_teardown_script`), shown
+beside the setup script as the right half of the script pair. Same mechanics as setup, differing
+only in timing:
+- **Runs on removal only, on a LIVE worktree** — `worktree::run_teardown` loads the row, skips a
+  marker (its folder is already gone) and an empty script, then runs `git::run_teardown_script`
+  (the other thin wrapper over the shared `git::run_script`) in the worktree dir. Same `bash -c`,
+  no-shebang, login-shell-PATH, and run-log-header behaviour as setup.
+- **Runs BEFORE `git worktree remove`** — the folder must still exist. `spawn_worktree_remove` runs
+  teardown first, then the git remove, both off the worker loop under the existing "Removing…" busy
+  guard (§13 confirm still applies).
+- **A teardown failure is NON-fatal** (like setup): the removal proceeds regardless (a broken
+  teardown can't strand a worktree the owner asked to remove), and the teardown error is surfaced
+  only when the git remove itself succeeded — a git refusal (dirty tree, which leaves the worktree
+  live) takes precedence as the actionable failure. Run as a SEPARATE step from `remove`, so it
+  never blocks it.
+
 **Open in VS Code.** A worktree row's "Open in VS Code" launches `open -a "Visual Studio Code"
 <path>` off the worker thread (`app::projects::spawn_worktree_open`). It changes no state, but the
 click still gets immediate feedback: the same per-worktree `busy` guard shows an "Opening…" spinner
 on the row, and `settle_reload` clears it (and surfaces a launch error) when the launch returns. It
-lives beside git in `system/projects/git.rs` (with the editor launch and the setup-script runner —
-the non-git external commands) and rolls up as `ProcessError` like git does.
+lives beside git in `system/projects/git.rs` (with the editor launch and the setup-/teardown-script
+runner — the non-git external commands) and rolls up as `ProcessError` like git does.
 
-**Schema.** `projects` (profile-scoped, cascades; carries `setup_script`) + `worktrees` (a churny, lightweight table:
+**Schema.** `projects` (profile-scoped, cascades; carries `setup_script` + `teardown_script`) + `worktrees` (a churny, lightweight table:
 `project_id`, `ticket_id`, `name`, `branch`, `removed_at`, with `UNIQUE(project_id, ticket_id)`
 and a partial-unique on active `(project_id, name)`). Both cascade from their parents. Keep the
 worktrees table lean — it takes common hard creates/deletes.
@@ -851,7 +878,7 @@ tables + inline thumbnails); regenerate/extend it alongside the images.
 | `tasks/`    | `board`, `board-empty`, `board-search`, `ticket`, `page`, `create`, `stage-edit` |
 | `notes/`    | `notes`, `notes-empty`, `notes-file` |
 | `todos/`    | `todos`, `todos-empty` |
-| `projects/` | `projects`, `projects-empty`, `projects-loading`, `projects-pulling`, `add-project`, `project`, `setup-script`, `worktree-creating`, `worktree-removing` |
+| `projects/` | `projects`, `projects-empty`, `projects-loading`, `projects-pulling`, `add-project`, `project`, `setup-script`, `teardown-script`, `worktree-creating`, `worktree-removing` |
 | `shell/`    | `error`, `error-output`, `loading`, `confirm-delete` (cross-cutting, not tied to a tab) |
 
 **The invariant (must always hold):**

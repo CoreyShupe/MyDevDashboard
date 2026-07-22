@@ -229,6 +229,16 @@ impl DashboardApp {
                 self.data = Rc::new(data);
                 self.active_tab = Tab::Projects;
             }
+            dev::DevView::TeardownScript => {
+                let data = dev::mock_board();
+                // The first project (my-dev-dashboard) also carries a teardown script in the mock.
+                if let Some(card) = data.projects.projects.first() {
+                    self.projects
+                        .dev_open_teardown_script(card.project.id, &card.project.teardown_script);
+                }
+                self.data = Rc::new(data);
+                self.active_tab = Tab::Projects;
+            }
             dev::DevView::WorktreeCreating => {
                 let mut data = dev::mock_board();
                 // Open the child ticket (as dev_open_ticket does) and mark a worktree as being

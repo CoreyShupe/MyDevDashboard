@@ -104,8 +104,9 @@ Local repositories + their git worktrees.
 | Projects grid mid git-status refresh (spinners) | `projects-loading` |
 | Projects grid with a one-click Pull in flight ("Pulling…") | `projects-pulling` |
 | Add-project modal (folder picker + name) | `add-project` |
-| Project detail (setup script + metadata + live/removed worktrees) | `project` |
-| Edit-setup-script modal (per-worktree bash) | `setup-script` |
+| Project detail (setup + teardown scripts + metadata + live/removed worktrees) | `project` |
+| Edit-setup-script modal (per-worktree bash, run on create) | `setup-script` |
+| Edit-teardown-script modal (per-worktree bash, run on remove) | `teardown-script` |
 | Ticket detail with a worktree mid-setup (spinner) | `worktree-creating` |
 | Project detail with a live worktree being removed ("Removing…" spinner) | `worktree-removing` |
 
@@ -116,6 +117,7 @@ Local repositories + their git worktrees.
 ![add-project](projects/add-project.png)
 ![project](projects/project.png)
 ![setup-script](projects/setup-script.png)
+![teardown-script](projects/teardown-script.png)
 ![worktree-creating](projects/worktree-creating.png)
 ![worktree-removing](projects/worktree-removing.png)
 
