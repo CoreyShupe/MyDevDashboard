@@ -16,8 +16,11 @@ pub enum Command {
         ticket_id: Uuid,
         branch: String,
     },
-    /// Recreate a removed worktree from its historical marker.
+    /// Recreate a removed worktree from its historical marker (same branch).
     Recreate { id: Uuid },
+    /// Recreate a removed marker under a NEW branch — a non-destructive branch switch affecting
+    /// only this worktree (AGENTS.md §10).
+    RecreateAs { id: Uuid, branch: String },
     /// Remove a worktree's folder, leaving a marker on the ticket.
     Remove { id: Uuid },
     /// Open a worktree's folder in VS Code (a pure side effect — no state change).
@@ -34,6 +37,9 @@ impl Command {
     }
     pub fn recreate(id: Uuid) -> Self {
         Self::Recreate { id }
+    }
+    pub fn recreate_as(id: Uuid, branch: String) -> Self {
+        Self::RecreateAs { id, branch }
     }
     pub fn remove(id: Uuid) -> Self {
         Self::Remove { id }
@@ -66,7 +72,11 @@ pub async fn handle(backend: &Backend, emitter: &Emitter, cmd: Command) {
         Command::Recreate { id } => {
             // Recreate looks up its (project, ticket) asynchronously, so it emits the loading
             // snapshot from within the spawned task itself.
-            crate::app::projects::spawn_worktree_recreate(backend, emitter, id);
+            crate::app::projects::spawn_worktree_recreate(backend, emitter, id, None);
+        }
+        Command::RecreateAs { id, branch } => {
+            // Same off-loop provision as Recreate, but onto a new branch (see spawn helper).
+            crate::app::projects::spawn_worktree_recreate(backend, emitter, id, Some(branch));
         }
         Command::Remove { id } => {
             // `git worktree remove` shells out; spawn it off the loop with a "Removing…" spinner

@@ -326,9 +326,10 @@ impl ProjectsState {
         if let Some(worktree_id) = wt_actions.remove {
             self.confirm_remove_worktree = Some(worktree_id);
         }
-        if let Some(ticket_id) = wt_actions.open_ticket {
-            // Hand off to the shell → board (cross-feature): open this worktree's ticket detail.
-            self.pending_open_ticket = Some(ticket_id);
+        if let Some(open) = wt_actions.open_ticket {
+            // Hand off to the shell → board (cross-feature): open this worktree's ticket detail
+            // (in the requested presentation — modal / full page).
+            self.pending_open_ticket = Some(open);
         }
     }
 

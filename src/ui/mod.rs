@@ -239,6 +239,68 @@ impl DashboardApp {
                 self.data = Rc::new(data);
                 self.active_tab = Tab::Projects;
             }
+            dev::DevView::CreateWorktree => {
+                // Open the ticket that has a removed marker (so its branch seeds the picker and a
+                // project is still eligible), then open the create-worktree picker over its page.
+                let data = dev::mock_board();
+                if let Some(marker) = data.projects.worktrees.iter().find(|w| !w.is_live()) {
+                    let ticket_id = marker.ticket_id;
+                    let branch = marker.branch.clone();
+                    if let Some(ticket) = data.tasks.tickets.iter().find(|t| t.id == ticket_id) {
+                        self.board.dev_open(ticket, true);
+                    }
+                    self.projects
+                        .dev_open_create_worktree(ticket_id, branch, true);
+                }
+                self.data = Rc::new(data);
+                self.active_tab = Tab::Tasks;
+            }
+            dev::DevView::TicketBack => {
+                // Open the child ticket as a modal with its parent seeded as back-history, so the
+                // "← Back" affordance shows (browser-like ticket navigation).
+                let data = dev::mock_board();
+                if let Some(child) = data.tasks.tickets.iter().find(|t| t.parent_id.is_some())
+                    && let Some(back) = child.parent_id
+                {
+                    self.board.dev_open_with_back(child, back, false);
+                }
+                self.data = Rc::new(data);
+                self.active_tab = Tab::Tasks;
+            }
+            dev::DevView::CreateWorktreeFresh => {
+                // A ticket with no worktrees yet → the branch picker has no existing branches, so
+                // it shows a plain "type a new branch" text field (no dropdown).
+                let data = dev::mock_board();
+                let with_wt: Vec<uuid::Uuid> = data
+                    .projects
+                    .worktrees
+                    .iter()
+                    .map(|w| w.ticket_id)
+                    .collect();
+                if let Some(ticket) = data.tasks.tickets.iter().find(|t| !with_wt.contains(&t.id)) {
+                    let ticket_id = ticket.id;
+                    self.board.dev_open(ticket, true);
+                    self.projects
+                        .dev_open_create_worktree(ticket_id, String::new(), false);
+                }
+                self.data = Rc::new(data);
+                self.active_tab = Tab::Tasks;
+            }
+            dev::DevView::WorktreeRecreateAs => {
+                // Open the marker's ticket page and the recreate-under-new-branch modal over it.
+                let data = dev::mock_board();
+                if let Some(marker) = data.projects.worktrees.iter().find(|w| !w.is_live()) {
+                    let worktree_id = marker.id;
+                    let ticket_id = marker.ticket_id;
+                    if let Some(ticket) = data.tasks.tickets.iter().find(|t| t.id == ticket_id) {
+                        self.board.dev_open(ticket, true);
+                    }
+                    self.projects
+                        .dev_open_recreate_worktree_as(worktree_id, true);
+                }
+                self.data = Rc::new(data);
+                self.active_tab = Tab::Tasks;
+            }
             dev::DevView::WorktreeCreating => {
                 let mut data = dev::mock_board();
                 // Open the child ticket (as dev_open_ticket does) and mark a worktree as being
@@ -448,44 +510,54 @@ impl DashboardApp {
                     .corner_radius(egui::CornerRadius::ZERO)
                     .inner_margin(egui::Margin::same(18)),
             )
-            .show(ui, |ui| match self.active_tab {
-                Tab::Home => {
-                    // The Overview aggregates every feature's slice; it reports navigation intents
-                    // (switch tab / open a ticket) for the shell to act on — like the Notes
-                    // create-ticket hand-off (AGENTS.md §2). Opening a ticket switches to Tasks and
-                    // opens its detail; the modal then renders in the overlay pass below.
-                    let outcome = self.home.render_workspace(ui, &self.bridge, data);
-                    if let Some(tab) = outcome.goto {
-                        self.active_tab = tab;
-                        self.bridge
-                            .send(crate::app::profile::Event::set_last_view(tab.as_view()));
-                    }
-                    if let Some(ticket_id) = outcome.open_ticket
-                        && let Some(ticket) = data.tasks.ticket(ticket_id)
-                    {
-                        self.active_tab = Tab::Tasks;
-                        self.board.open_ticket_modal(&self.bridge, ticket);
-                    }
-                }
-                Tab::Tasks => {
+            .show(ui, |ui| {
+                // A ticket expanded to its full page takes over the workspace OVER WHATEVER TAB is
+                // active — so a ticket opened from Home/Projects/etc. shows in place, and "Back"
+                // (or close) returns to that tab underneath (tasks navigation; FEATURE B/C). The
+                // quick modal likewise floats over any tab in the overlay pass below.
+                if self.board.has_expanded_ticket() {
                     self.board
-                        .render_workspace(ui, &self.bridge, &data.tasks, &data.projects)
+                        .render_ticket_page(ui, &self.bridge, &data.tasks, &data.projects);
+                    return;
                 }
-                Tab::Notes => {
-                    let outcome = self.notes.render_workspace(ui, &self.bridge, &data.notes);
-                    // "Create Ticket" from a note drives the board's create modal, so the
-                    // shell coordinates it across features (AGENTS.md §2). The modal renders
-                    // as an overlay, so it appears over the Notes tab without switching tabs.
-                    if let Some((note_id, body)) = outcome.create_ticket_from {
-                        self.board
-                            .open_new_ticket_from_note(note_id, body, &data.tasks);
+                match self.active_tab {
+                    Tab::Home => {
+                        // The Overview aggregates every feature's slice; it reports navigation intents
+                        // (switch tab / open a ticket) for the shell to act on — like the Notes
+                        // create-ticket hand-off (AGENTS.md §2). Opening a ticket shows its detail over
+                        // the CURRENT tab (no jump to Tasks) — modal in the overlay pass, or the full
+                        // page above if right-clicked (tasks navigation).
+                        let outcome = self.home.render_workspace(ui, &self.bridge, data);
+                        if let Some(tab) = outcome.goto {
+                            self.active_tab = tab;
+                            self.bridge
+                                .send(crate::app::profile::Event::set_last_view(tab.as_view()));
+                        }
+                        if let Some((ticket_id, open)) = outcome.open_ticket
+                            && let Some(ticket) = data.tasks.ticket(ticket_id)
+                        {
+                            self.board.open_ticket(&self.bridge, ticket, open);
+                        }
                     }
+                    Tab::Tasks => self.board.render_workspace(ui, &self.bridge, &data.tasks),
+                    Tab::Notes => {
+                        let outcome = self.notes.render_workspace(ui, &self.bridge, &data.notes);
+                        // "Create Ticket" from a note drives the board's create modal, so the
+                        // shell coordinates it across features (AGENTS.md §2). The modal renders
+                        // as an overlay, so it appears over the Notes tab without switching tabs.
+                        if let Some((note_id, body)) = outcome.create_ticket_from {
+                            self.board
+                                .open_new_ticket_from_note(note_id, body, &data.tasks);
+                        }
+                    }
+                    Tab::Projects => self.projects.render_workspace(
+                        ui,
+                        &self.bridge,
+                        &data.projects,
+                        &data.tasks,
+                    ),
+                    Tab::Todos => self.todos.render_workspace(ui, &self.bridge, &data.todos),
                 }
-                Tab::Projects => {
-                    self.projects
-                        .render_workspace(ui, &self.bridge, &data.projects, &data.tasks)
-                }
-                Tab::Todos => self.todos.render_workspace(ui, &self.bridge, &data.todos),
             });
     }
 
@@ -504,6 +576,10 @@ impl DashboardApp {
             .corner_radius(egui::CornerRadius::same(theme::radius::INPUT));
         if ui.add_sized([ui.available_width(), 36.0], button).clicked() {
             self.active_tab = tab;
+            // A ticket detail renders OVER the active tab (§2 ticket navigation), so leave it when
+            // switching tabs — otherwise it stays on top and the tab click looks dead. Snap out to
+            // the clicked tab's dashboard.
+            self.board.close_detail();
             // Remember this as the active profile's last-viewed page so a relaunch / profile
             // switch lands back here (§9). Quiet write-through — no snapshot (see profile::handle).
             self.bridge
@@ -710,15 +786,14 @@ impl eframe::App for DashboardApp {
         // Overlays render last so they sit on top of whatever is behind them. Suppressed while a
         // full-screen onboarding flow is up (no board/notes behind them to act on).
         if data.has_profile() && !self.new_profile_flow {
-            // A worktree row's "Open ticket" (projects) opens that ticket's detail on the board —
-            // the reverse of the create-worktree hand-off (§2). Consumed before the board renders
-            // its overlays so the detail shows the same frame; switch to Tasks so the board (and
-            // the Expand-to-full-page path) is the backdrop.
-            if let Some(ticket_id) = self.projects.take_pending_open_ticket()
+            // A worktree row's "Open ticket" (projects) opens that ticket's detail — the reverse of
+            // the create-worktree hand-off (§2). It shows OVER the current tab (no forced jump to
+            // Tasks): a modal in the overlay pass, or the full page above if right-clicked (tasks
+            // navigation). Consumed before the board renders its overlays so it shows the same frame.
+            if let Some((ticket_id, open)) = self.projects.take_pending_open_ticket()
                 && let Some(ticket) = data.tasks.ticket(ticket_id)
             {
-                self.active_tab = Tab::Tasks;
-                self.board.open_ticket_modal(&self.bridge, ticket);
+                self.board.open_ticket(&self.bridge, ticket, open);
             }
             self.board
                 .render_overlays(&ctx, &self.bridge, &data.tasks, &data.projects);
@@ -731,13 +806,26 @@ impl eframe::App for DashboardApp {
                 .render_confirmations(&ctx, &self.bridge, &data.tasks);
             self.notes.render_overlays(&ctx, &self.bridge, &data.tasks);
             // A "Create worktree" request raised by the open ticket detail is handed to the
-            // projects UI, which owns the picker (cross-feature coordination, AGENTS.md §2).
+            // projects UI, which owns the picker (cross-feature coordination, AGENTS.md §2). Seed
+            // the branch field with the ticket's first existing branch as a convenience (§10).
             if let Some(ticket_id) = self.board.take_pending_worktree() {
-                self.projects.open_create_worktree(ticket_id);
+                let default_branch = data
+                    .projects
+                    .worktrees_for_ticket(ticket_id)
+                    .next()
+                    .map(|w| w.branch.clone())
+                    .unwrap_or_default();
+                self.projects
+                    .open_create_worktree(ticket_id, default_branch);
             }
             // Likewise a "Remove worktree" request — the projects UI owns the confirmation (§13).
             if let Some(worktree_id) = self.board.take_pending_remove_worktree() {
                 self.projects.request_remove_worktree(worktree_id);
+            }
+            // And a "Recreate under a new branch" request — the projects UI owns the branch picker
+            // (§2 + §10).
+            if let Some(worktree_id) = self.board.take_pending_recreate_worktree_as() {
+                self.projects.open_recreate_worktree_as(worktree_id);
             }
             self.projects
                 .render_overlays(&ctx, &self.bridge, &data.projects, &data.tasks);

@@ -14,12 +14,51 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::app::Bridge;
-use crate::app::projects::View as ProjectsView;
 use crate::app::tasks::{Message, View as TasksView};
 use crate::ui::theme;
 
 use stage::StageModal;
 use ticket::{NewTicketModal, TicketModal};
+
+/// How a ticket link was activated → which presentation to open. Left-click opens the quick
+/// **modal**; right-click (secondary) opens the **full page**. Every ticket link in the app — board
+/// cards, parent/child quick-links, the Home overview, a project's "Open ticket" — funnels through
+/// this so the gesture is consistent everywhere (tickets are the most-featured model, so opening
+/// one behaves the same wherever it's referenced).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TicketOpen {
+    /// The quick overlay modal (left-click).
+    Modal,
+    /// The full-page detail (right-click), rendered over whatever tab you're on.
+    Page,
+}
+
+impl TicketOpen {
+    /// Whether this presentation is the expanded full page.
+    fn expanded(self) -> bool {
+        matches!(self, Self::Page)
+    }
+}
+
+/// Map a clickable ticket-link `Response` to how it was activated: left-click → `Modal`,
+/// right-click → `Page`, no activation → `None`. The shared gesture for every ticket link.
+pub fn ticket_open_from(response: &egui::Response) -> Option<TicketOpen> {
+    if response.clicked() {
+        Some(TicketOpen::Modal)
+    } else if response.secondary_clicked() {
+        Some(TicketOpen::Page)
+    } else {
+        None
+    }
+}
+
+/// One step of ticket back-history: which ticket, and which presentation it was shown in, so
+/// "Back" restores it exactly (AGENTS.md §2 "Ticket navigation").
+#[derive(Debug, Clone, Copy)]
+struct BackEntry {
+    ticket_id: Uuid,
+    expanded: bool,
+}
 
 /// All transient UI state for the board. Lives in the UI only.
 #[derive(Default)]
@@ -35,14 +74,22 @@ pub struct BoardState {
     viewing_terminal: HashSet<Uuid>,
     /// The open "new ticket" modal, if any (board-wide; one at a time).
     new_ticket: Option<NewTicketModal>,
-    /// The open ticket detail modal, if any.
+    /// The open ticket detail, if any (modal or full page — `TicketModal::expanded` picks which).
     modal: Option<TicketModal>,
+    /// Back-history of tickets viewed BELOW the current one (`modal`). Following a ticket link from
+    /// within a detail pushes the current entry; "Back" pops it (or, when empty, closes the detail
+    /// and returns to the tab underneath). A fresh open from outside a detail clears it (AGENTS.md
+    /// tasks navigation).
+    back_stack: Vec<BackEntry>,
     /// Set when the open ticket detail asks to create a worktree. The app shell drains this and
     /// opens the projects-owned create-worktree picker (cross-feature, AGENTS.md §2).
     pending_worktree: Option<Uuid>,
     /// Set when the ticket detail asks to remove a worktree — the shell hands it to the projects
     /// UI, which owns the remove confirmation (cross-feature, §2 + §13).
     pending_remove_worktree: Option<Uuid>,
+    /// Set when the ticket detail asks to recreate a marker on a new branch — the shell hands it to
+    /// the projects UI, which owns the branch picker (cross-feature, §2 + §10).
+    pending_recreate_worktree_as: Option<Uuid>,
     /// A stage pending a delete confirmation, if any (destructive, §13).
     confirm_delete_stage: Option<Uuid>,
     /// A ticket pending a delete confirmation, if any (destructive, §13).
@@ -93,6 +140,21 @@ impl BoardState {
         self.modal = Some(modal);
     }
 
+    /// Dev-only: open a ticket detail with a back-history entry beneath it, so the "Back" affordance
+    /// (which only shows when there's somewhere to go back to) is reviewable. See `ui::dev`.
+    pub fn dev_open_with_back(
+        &mut self,
+        ticket: &crate::domain::tasks::Ticket,
+        back_ticket_id: Uuid,
+        expanded: bool,
+    ) {
+        self.back_stack = vec![BackEntry {
+            ticket_id: back_ticket_id,
+            expanded: false,
+        }];
+        self.dev_open(ticket, expanded);
+    }
+
     /// Close a stale modal / confirmation if its ticket or stage disappeared in the latest
     /// snapshot (e.g. deleted elsewhere), so nothing dangles pointing at a gone entity.
     pub fn reconcile(&mut self, view: &TasksView) {
@@ -101,6 +163,9 @@ impl BoardState {
         {
             self.modal = None;
         }
+        // Drop back-history entries for tickets deleted elsewhere, so "Back" never targets a ghost.
+        self.back_stack
+            .retain(|e| view.ticket(e.ticket_id).is_some());
         if self
             .confirm_delete_ticket
             .is_some_and(|id| view.ticket(id).is_none())
@@ -125,6 +190,12 @@ impl BoardState {
     /// to the projects UI, which owns the remove confirmation (§13).
     pub fn take_pending_remove_worktree(&mut self) -> Option<Uuid> {
         self.pending_remove_worktree.take()
+    }
+
+    /// Take a pending "recreate marker on a new branch" request raised by the ticket detail; the
+    /// shell hands it to the projects UI, which owns the branch picker (§2 + §10).
+    pub fn take_pending_recreate_worktree_as(&mut self) -> Option<Uuid> {
+        self.pending_recreate_worktree_as.take()
     }
 
     /// The board's destructive-confirmation overlays (delete ticket / delete stage). Rendered
@@ -171,20 +242,10 @@ impl BoardState {
 
     /// The board workspace: header (title + add-stage) and the horizontal stage columns.
     ///
-    /// When a ticket detail is expanded, the full-page ticket view takes over the workspace
-    /// instead of the board (the modal overlay is suppressed while expanded).
-    pub fn render_workspace(
-        &mut self,
-        ui: &mut egui::Ui,
-        bridge: &Bridge,
-        view: &TasksView,
-        projects: &ProjectsView,
-    ) {
-        if self.modal.as_ref().is_some_and(|m| m.expanded) {
-            self.render_ticket_page(ui, bridge, view, projects);
-            return;
-        }
-
+    /// The full-page ticket view is NOT rendered here — when a ticket is expanded the shell renders
+    /// it as a workspace takeover over WHATEVER tab is active (so a ticket opened from Home stays on
+    /// Home underneath), see `has_expanded_ticket`. The modal overlay likewise floats over any tab.
+    pub fn render_workspace(&mut self, ui: &mut egui::Ui, bridge: &Bridge, view: &TasksView) {
         ui.horizontal(|ui| {
             ui.heading("Tasks");
             ui.add_space(16.0);

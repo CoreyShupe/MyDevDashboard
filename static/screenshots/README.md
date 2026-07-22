@@ -54,8 +54,9 @@ The Tasks board and the ticket/stage flows.
 | Board with stages + tickets (incl. a collapsed terminal stage) | `board` |
 | Empty board (profile, no stages) | `board-empty` |
 | Board with a search query filtering tickets across columns | `board-search` |
-| Ticket detail — modal overlay | `ticket` |
-| Ticket detail — full page (worktrees + notes) | `page` |
+| Ticket detail — modal overlay (left-click a ticket link) | `ticket` |
+| Ticket detail — full page (right-click a link, or Expand): worktrees + notes | `page` |
+| Ticket detail drilled in from another ticket — shows the "← Back" affordance | `ticket-back` |
 | New-ticket create modal | `create` |
 | Edit-stage modal (terminal toggle) | `stage-edit` |
 
@@ -64,6 +65,7 @@ The Tasks board and the ticket/stage flows.
 ![board-search](tasks/board-search.png)
 ![ticket](tasks/ticket.png)
 ![page](tasks/page.png)
+![ticket-back](tasks/ticket-back.png)
 ![create](tasks/create.png)
 ![stage-edit](tasks/stage-edit.png)
 
@@ -107,6 +109,9 @@ Local repositories + their git worktrees.
 | Project detail (setup + teardown scripts + metadata + live/removed worktrees) | `project` |
 | Edit-setup-script modal (per-worktree bash, run on create) | `setup-script` |
 | Edit-teardown-script modal (per-worktree bash, run on remove) | `teardown-script` |
+| Create-worktree picker — branch dropdown open (existing branches + "New branch…") | `create-worktree` |
+| Create-worktree picker for a ticket with no branches (plain text field) | `create-worktree-fresh` |
+| Recreate a removed marker under a new branch (non-destructive branch switch) | `worktree-recreate-as` |
 | Ticket detail with a worktree mid-setup (spinner) | `worktree-creating` |
 | Project detail with a live worktree being removed ("Removing…" spinner) | `worktree-removing` |
 
@@ -118,6 +123,9 @@ Local repositories + their git worktrees.
 ![project](projects/project.png)
 ![setup-script](projects/setup-script.png)
 ![teardown-script](projects/teardown-script.png)
+![create-worktree](projects/create-worktree.png)
+![create-worktree-fresh](projects/create-worktree-fresh.png)
+![worktree-recreate-as](projects/worktree-recreate-as.png)
 ![worktree-creating](projects/worktree-creating.png)
 ![worktree-removing](projects/worktree-removing.png)
 

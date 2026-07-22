@@ -49,10 +49,11 @@ allowlisted (it will prompt) — use the wrapper.
 | Database up / down / wipe+restart / shell | `./dev-dash db up` · `db down` · `db reset` · `db psql` |
 
 `VIEW` ∈ `home · home-empty · onboarding · new-profile · profile-select · board · board-empty ·
-board-search · ticket · page · create · stage-edit · confirm-delete · notes · notes-empty ·
+board-search · ticket · page · ticket-back · create · stage-edit · confirm-delete · notes · notes-empty ·
 notes-file · todos · todos-empty · projects · projects-empty · projects-loading ·
-projects-pulling · add-project · project · setup-script · teardown-script · worktree-creating ·
-worktree-removing · loading · error · error-output` (defined
+projects-pulling · add-project · project · setup-script · teardown-script · create-worktree ·
+create-worktree-fresh · worktree-recreate-as · worktree-creating · worktree-removing · loading ·
+error · error-output` (defined
 in `ui/dev.rs`; see §8). Every one has a committed screenshot under `static/screenshots/` (§11).
 **Never edit `dev-dash` itself** (trust boundary, §6).
 
@@ -262,9 +263,30 @@ thin — it only names the level below and hands off; per-action logic lives at 
   raises a "create worktree" request that the shell hands to the projects UI (which owns the
   picker) — mirroring the notes→create-ticket coordination. The **reverse** also exists: a worktree
   row on the **project detail** has an "Open ticket" button that raises an open-ticket request
-  (`ProjectsState::take_pending_open_ticket`), which the shell hands to the **board** — it switches
-  to the Tasks tab and opens that ticket's detail (`BoardState::open_ticket_modal`).
+  (`ProjectsState::take_pending_open_ticket`), which the shell hands to the **board**
+  (`BoardState::open_ticket`) — opening the detail OVER the current tab (see ticket navigation
+  below), no longer forcing a jump to Tasks.
 - The UI thread MUST NEVER block on I/O. All DB/async work happens on the tokio worker.
+
+### Ticket navigation (tickets are the most-featured model — opening one behaves the same everywhere)
+Every **ticket link** in the app — board cards, parent/child quick-links, the Home overview, a
+project worktree's "Open ticket" — funnels through one gesture (`ui::tasks::ticket_open_from`):
+**left-click opens the quick modal, right-click opens the full page.** All those call sites carry a
+`ui::tasks::TicketOpen` (Modal/Page) rather than a bare id, so the presentation is chosen at the
+click, not hard-coded per site.
+- **The detail is tab-independent.** The full-page detail renders as a workspace TAKEOVER over
+  whatever tab is active (the shell checks `BoardState::has_expanded_ticket()` before routing to the
+  active tab), and the modal floats as an overlay over any tab. So a ticket opened from Home/Projects
+  shows in place and returns you there — features never force-switch to Tasks to show a ticket.
+- **Real back-navigation.** `BoardState` keeps a `back_stack`. Opening a ticket from OUTSIDE a detail
+  (`open_ticket`) clears it; following a link from WITHIN a detail (`navigate_to`) pushes the current
+  ticket; **"Back"** (`go_back`) pops to the previous ticket — restoring its presentation — or, when
+  the stack is empty, closes the detail and returns to the tab underneath. "Expand" (`expand_current`)
+  pushes too, so Back returns to the modal. A left-click inside a detail continues in the current
+  presentation (page stays page); a right-click always forces the page. The X/backdrop closes the
+  whole detail (clears the stack), and **clicking a nav tab** also closes it (`close_detail`) — since
+  the detail renders OVER the active tab, switching tabs must drop it or the tab click looks dead.
+  `reconcile` prunes back-entries for tickets deleted elsewhere.
 
 ### Data flow (one direction each way)
 ```
@@ -580,6 +602,7 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 | `board-empty`    | Tasks board with no stages (empty state) |
 | `ticket`         | Ticket detail modal |
 | `page`           | Ticket detail, full-page (expanded) |
+| `ticket-back`    | Ticket detail modal drilled in from another ticket — shows the "← Back" affordance |
 | `create`         | New-ticket create modal (with stage picker) |
 | `stage-edit`     | Edit-stage modal (name + terminal toggle + delete) |
 | `confirm-delete` | Destructive-action confirmation (delete ticket) — the shared confirm modal |
@@ -597,6 +620,9 @@ are ignored. The wrapper passes `VIEW` through as `DEV_VIEW`. Available:
 | `project`        | A project's full-page detail (metadata + setup + teardown scripts + worktrees) |
 | `setup-script`   | The "edit setup script" modal over the project detail (per-worktree bash, run on create) |
 | `teardown-script`| The "edit teardown script" modal over the project detail (per-worktree bash, run on remove) |
+| `create-worktree` | Create-worktree picker with the branch dropdown open (existing branches + "New branch…") |
+| `create-worktree-fresh` | Create-worktree picker for a ticket with no branches yet — the branch picker is a plain text field |
+| `worktree-recreate-as` | Recreate a removed marker under a NEW branch — the non-destructive per-worktree branch switch |
 | `worktree-creating` | Ticket detail with a worktree mid-provision — its setup-script spinner |
 | `worktree-removing` | Project detail with a live worktree being removed — its "Removing…" spinner |
 | `loading`        | The pre-first-snapshot loading screen (spinner before any data arrives) |
@@ -750,10 +776,15 @@ dashboard. A worktree is tied **1:1 to a ticket** within a project:
 - **Ticket-driven creation only.** The only create entry point is a ticket's detail page
   (§2 coordination). A ticket may have **at most one worktree per project**; `worktree::create`
   rejects a duplicate (`ProjectError::WorktreeExists`).
-- **One shared branch per ticket.** The branch is chosen once (on the ticket's first worktree)
-  and **reused** for every later worktree of that ticket, in any project — so a ticket's work
-  sits on the same branch name everywhere. Different projects are different repos, so each still
-  gets its own `-b` branch creation.
+- **Branch is chosen PER worktree.** `worktree::create` uses the requested branch verbatim; a
+  ticket's worktrees may sit on **different** branches when project scope diverges (there is no
+  longer a forced single "ticket branch"). The **branch picker** (`ui/projects/worktree::branch_picker`,
+  used by the create + recreate-as modals) is dropdown-first: it lists the ticket's existing branch
+  names — sourced from OUR worktree rows, NOT `git branch` — plus a trailing "New branch…" entry that
+  reveals a text field to type a fresh one; picking an existing branch again is the way back out of
+  typing mode. When the ticket has no branches yet it degrades to a plain text field. The create
+  modal pre-selects the ticket's first existing branch as a convenience. Different projects are
+  different repos, so each new branch still gets its own `-b` creation on `worktree add`.
 - **The resolved path can't escape.** Before touching git or disk, `worktree::provision` builds the
   path with `domain::projects::worktree::checked_worktree_path`, which resolves `.`/`..` LEXICALLY
   (pure — no filesystem/symlink I/O) and refuses any name whose resolved path isn't exactly
@@ -778,6 +809,15 @@ dashboard. A worktree is tied **1:1 to a ticket** within a project:
   "waiting" state**: `app::projects::spawn_worktree_remove` guards it per-worktree-id via
   `WorktreeService::{begin,end}_busy` (a double-click is a no-op) and the row swaps its buttons for
   a "Removing…" spinner (`projects::View::busy`) until `settle_reload` lands (§8 `worktree-removing`).
+- **Recreate under a NEW branch (non-destructive branch switch).** A marker also offers "Recreate
+  as…" (`worktree::recreate_as` → `worktree::Command::RecreateAs`), which recreates it onto a
+  branch chosen in the branch picker instead of its original one. It affects **only that worktree**
+  — the ticket's other worktrees are untouched — and the marker's **old git branch is never
+  deleted** (only the row's `name`/`branch` are repointed). This is how a ticket's scope change in
+  one project is absorbed without disturbing the rest. It's marker-only (to switch a LIVE worktree,
+  remove it first, then recreate-as) and, like the same-branch recreate, runs through
+  `spawn_worktree_recreate` (now taking an `Option<branch>`) with the fresh-provision setup run. The
+  modal is projects-owned; the ticket detail raises the request via the shell (§2), mirroring create.
 - **Markers are ticket-only in the UI.** The project detail lists **live worktrees only** (what's
   checked out right now); removed markers show exclusively on their originating ticket's detail,
   which owns recreation. Don't surface markers on the project page.
@@ -875,10 +915,10 @@ tables + inline thumbnails); regenerate/extend it alongside the images.
 |--------|----------------------|
 | `home/`     | `home`, `home-empty` |
 | `profile/`  | `onboarding`, `new-profile`, `profile-select` |
-| `tasks/`    | `board`, `board-empty`, `board-search`, `ticket`, `page`, `create`, `stage-edit` |
+| `tasks/`    | `board`, `board-empty`, `board-search`, `ticket`, `page`, `ticket-back`, `create`, `stage-edit` |
 | `notes/`    | `notes`, `notes-empty`, `notes-file` |
 | `todos/`    | `todos`, `todos-empty` |
-| `projects/` | `projects`, `projects-empty`, `projects-loading`, `projects-pulling`, `add-project`, `project`, `setup-script`, `teardown-script`, `worktree-creating`, `worktree-removing` |
+| `projects/` | `projects`, `projects-empty`, `projects-loading`, `projects-pulling`, `add-project`, `project`, `setup-script`, `teardown-script`, `create-worktree`, `create-worktree-fresh`, `worktree-recreate-as`, `worktree-creating`, `worktree-removing` |
 | `shell/`    | `error`, `error-output`, `loading`, `confirm-delete` (cross-cutting, not tied to a tab) |
 
 **The invariant (must always hold):**

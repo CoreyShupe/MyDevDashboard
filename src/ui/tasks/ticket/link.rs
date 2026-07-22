@@ -4,10 +4,9 @@
 //! "add child ticket" form. Mutations are collected as `Event`s; navigation is signalled
 //! via `navigate` so the modal can swap to another ticket after the borrow ends.
 
-use uuid::Uuid;
-
 use crate::app::tasks::{Event, View as TasksView};
 use crate::ui::components::{button, input};
+use crate::ui::tasks::{TicketOpen, ticket_open_from};
 use crate::ui::theme;
 
 use super::detail::TicketModal;
@@ -17,7 +16,7 @@ pub(super) fn render(
     modal: &mut TicketModal,
     view: &TasksView,
     events: &mut Vec<Event>,
-    navigate: &mut Option<Uuid>,
+    navigate: &mut Option<(uuid::Uuid, TicketOpen)>,
 ) {
     let muted = theme::palette().muted;
     let ticket_id = modal.ticket_id;
@@ -26,13 +25,14 @@ pub(super) fn render(
     let parent = view.ticket(ticket_id).and_then(|t| view.parent_of(t));
     if let Some(parent) = parent {
         ui.horizontal(|ui| {
-            if button::link(
+            // Left-click follows the link in the current presentation; right-click opens the full
+            // page (the shared ticket-link gesture, tasks navigation).
+            let link = button::link(
                 ui,
                 &format!("{} Parent: {}", theme::icon::PARENT, parent.title),
-            )
-            .clicked()
-            {
-                *navigate = Some(parent.id);
+            );
+            if let Some(open) = ticket_open_from(&link) {
+                *navigate = Some((parent.id, open));
             }
             if button::icon(ui, theme::icon::UNLINK, "Detach from parent").clicked() {
                 events.push(Event::unlink_ticket(ticket_id));
@@ -47,8 +47,9 @@ pub(super) fn render(
         ui.label(egui::RichText::new("No child tickets yet.").color(muted));
     } else {
         for child in &children {
-            if button::link(ui, &format!("{} {}", theme::icon::CHILD, child.title)).clicked() {
-                *navigate = Some(child.id);
+            let link = button::link(ui, &format!("{} {}", theme::icon::CHILD, child.title));
+            if let Some(open) = ticket_open_from(&link) {
+                *navigate = Some((child.id, open));
             }
         }
     }

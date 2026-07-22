@@ -51,6 +51,9 @@ impl Event {
     pub fn recreate_worktree(id: Uuid) -> Self {
         Self::Worktree(worktree::Command::recreate(id))
     }
+    pub fn recreate_worktree_as(id: Uuid, branch: String) -> Self {
+        Self::Worktree(worktree::Command::recreate_as(id, branch))
+    }
     pub fn remove_worktree(id: Uuid) -> Self {
         Self::Worktree(worktree::Command::remove(id))
     }
@@ -337,7 +340,16 @@ pub fn spawn_worktree_create(
 /// "setup failure is non-fatal" behaviour). Its `(project, ticket)` is looked up from the row
 /// first (recreate starts from only a worktree id), then the loading snapshot is emitted from
 /// within the task. No-op if one is already in flight.
-pub fn spawn_worktree_recreate(backend: &Backend, emitter: &Emitter, id: Uuid) {
+///
+/// `new_branch`: `None` recreates on the marker's original branch; `Some(branch)` is the
+/// non-destructive branch switch (`recreate_as`) — the same fresh provision, just onto a different
+/// branch, leaving the ticket's other worktrees untouched.
+pub fn spawn_worktree_recreate(
+    backend: &Backend,
+    emitter: &Emitter,
+    id: Uuid,
+    new_branch: Option<String>,
+) {
     let backend = backend.clone();
     let emitter = emitter.clone();
     tokio::spawn(async move {
@@ -357,8 +369,11 @@ pub fn spawn_worktree_recreate(backend: &Backend, emitter: &Emitter, id: Uuid) {
         }
         // Show the loading row now (the lookup was async, so we couldn't snapshot before spawning).
         emitter.snapshot(&backend).await;
-        let result =
-            provision_and_setup(backend.projects.worktree.recreate(id).await, &backend).await;
+        let provisioned = match &new_branch {
+            Some(branch) => backend.projects.worktree.recreate_as(id, branch).await,
+            None => backend.projects.worktree.recreate(id).await,
+        };
+        let result = provision_and_setup(provisioned, &backend).await;
         backend.projects.worktree.end_create(project_id, ticket_id);
         emitter.settle_reload(&backend, result).await;
     });

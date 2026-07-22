@@ -40,8 +40,9 @@ const NOTES_CAP: usize = 3;
 pub struct HomeOutcome {
     /// Switch to this tab (a stat tile or a "view all" link was clicked).
     pub goto: Option<Tab>,
-    /// Open this ticket's detail (a "pick up where you left off" row was clicked).
-    pub open_ticket: Option<Uuid>,
+    /// Open this ticket's detail (a "pick up where you left off" row was clicked) — left-click
+    /// opens the modal, right-click the full page (the shared ticket-link gesture).
+    pub open_ticket: Option<(Uuid, crate::ui::tasks::TicketOpen)>,
 }
 
 /// Transient UI state for the Overview. It holds nothing today (the page is a pure projection of
@@ -193,8 +194,8 @@ impl HomeState {
                 }
                 for ticket in recent {
                     let stage = data.tasks.stage(ticket.stage_id).map(|s| s.name.as_str());
-                    if ticket_row(ui, &ticket.title, stage) {
-                        outcome.open_ticket = Some(ticket.id);
+                    if let Some(open) = ticket_row(ui, &ticket.title, stage) {
+                        outcome.open_ticket = Some((ticket.id, open));
                     }
                 }
             },
@@ -378,11 +379,16 @@ fn stat_tile(
 
 /// A recent-ticket row: an accent title link + a muted stage chip on the right. Returns true when
 /// the title is clicked (open the detail).
-fn ticket_row(ui: &mut egui::Ui, title: &str, stage: Option<&str>) -> bool {
+fn ticket_row(
+    ui: &mut egui::Ui,
+    title: &str,
+    stage: Option<&str>,
+) -> Option<crate::ui::tasks::TicketOpen> {
     let p = theme::palette();
-    let mut clicked = false;
+    let mut open = None;
     ui.horizontal(|ui| {
-        clicked = crate::ui::components::button::link(ui, &truncate(title, 42)).clicked();
+        let link = crate::ui::components::button::link(ui, &truncate(title, 42));
+        open = crate::ui::tasks::ticket_open_from(&link);
         if let Some(stage) = stage {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(egui::RichText::new(stage).color(p.muted).size(12.0));
@@ -390,7 +396,7 @@ fn ticket_row(ui: &mut egui::Ui, title: &str, stage: Option<&str>) -> bool {
         }
     });
     ui.add_space(4.0);
-    clicked
+    open
 }
 
 /// An open-todo row: a done checkbox + the (truncated) body. Checking it completes the todo.

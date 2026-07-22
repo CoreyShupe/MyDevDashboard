@@ -11,7 +11,7 @@ mod link;
 mod note;
 
 use crate::app::Bridge;
-use crate::app::tasks::Event;
+use crate::app::tasks::{Event, View as TasksView};
 use crate::domain::tasks::Ticket;
 use crate::ui::components::{card, dnd};
 use crate::ui::theme;
@@ -119,16 +119,103 @@ impl BoardState {
             });
         }
 
-        if card.clicked() {
-            self.open_ticket_modal(bridge, ticket);
+        // Left-click opens the quick modal; right-click opens the full page (the shared ticket-link
+        // gesture, §2 tasks navigation). A drag is neither, so reordering never opens the detail.
+        if let Some(open) = super::ticket_open_from(&card) {
+            self.open_ticket(bridge, ticket, open);
         }
     }
 
-    /// Open the detail modal for a ticket and request its notes from the worker. `pub(crate)` so
-    /// the app shell can open a ticket detail from another feature (e.g. a project's worktree row).
-    pub(crate) fn open_ticket_modal(&mut self, bridge: &Bridge, ticket: &Ticket) {
+    /// Open a ticket detail FRESH — from OUTSIDE any detail (a board card, the Home overview, a
+    /// project's worktree row). Clears the back-history, so "Back" from here closes the detail and
+    /// returns to the tab underneath. `pub(crate)` so the app shell can open a ticket from another
+    /// feature. `open` picks the presentation (modal vs full page).
+    pub(crate) fn open_ticket(
+        &mut self,
+        bridge: &Bridge,
+        ticket: &Ticket,
+        open: super::TicketOpen,
+    ) {
+        self.back_stack.clear();
+        self.set_current(bridge, ticket, open.expanded());
+    }
+
+    /// Navigate to another ticket from WITHIN a detail (a parent/child or other ticket link). Pushes
+    /// the current ticket onto the back-stack (so "Back" returns to it), then shows the new one. A
+    /// right-click (`Page`) always forces the full page; a left-click (`Modal`) continues in the
+    /// CURRENT presentation, so following links inside a full page stays full-page (and inside a
+    /// modal stays a modal) rather than jarringly switching.
+    pub(crate) fn navigate_to(
+        &mut self,
+        bridge: &Bridge,
+        ticket: &Ticket,
+        open: super::TicketOpen,
+    ) {
+        let current_expanded = self.modal.as_ref().is_some_and(|m| m.expanded);
+        let expanded = open.expanded() || current_expanded;
+        if let Some(current) = self.modal.as_ref() {
+            self.back_stack.push(super::BackEntry {
+                ticket_id: current.ticket_id,
+                expanded: current.expanded,
+            });
+        }
+        self.set_current(bridge, ticket, expanded);
+    }
+
+    /// Expand the current modal to the full page, pushing the modal presentation onto the back-stack
+    /// so "Back" returns to it (the "Expand" affordance is thus a real forward navigation step).
+    pub(crate) fn expand_current(&mut self) {
+        if let Some(current) = self.modal.as_ref() {
+            self.back_stack.push(super::BackEntry {
+                ticket_id: current.ticket_id,
+                expanded: false,
+            });
+        }
+        if let Some(modal) = self.modal.as_mut() {
+            modal.expanded = true;
+        }
+    }
+
+    /// "Back": pop the previous ticket (restoring its presentation) if there is one; otherwise close
+    /// the detail entirely and fall back to the tab underneath. Skips any popped ticket that has
+    /// since vanished from the snapshot so Back never strands on a dead entry.
+    pub(crate) fn go_back(&mut self, bridge: &Bridge, view: &TasksView) {
+        while let Some(entry) = self.back_stack.pop() {
+            if let Some(ticket) = view.ticket(entry.ticket_id) {
+                self.set_current(bridge, ticket, entry.expanded);
+                return;
+            }
+        }
+        self.modal = None; // nothing left to go back to → leave the detail
+    }
+
+    /// Whether a ticket detail is currently expanded to the full page — the shell renders the page
+    /// as a workspace takeover over the active tab while this holds.
+    pub(crate) fn has_expanded_ticket(&self) -> bool {
+        self.modal.as_ref().is_some_and(|m| m.expanded)
+    }
+
+    /// Close any open ticket detail (modal or full page) and clear back-history. Called when the
+    /// owner clicks a nav tab: a ticket detail renders OVER the active tab (§2 ticket navigation),
+    /// so switching tabs must drop it — otherwise the detail stays on top and the tab click looks
+    /// dead. Returns you to the clicked tab's dashboard.
+    pub(crate) fn close_detail(&mut self) {
+        self.modal = None;
+        self.back_stack.clear();
+    }
+
+    /// Whether "Back" would return to a previous ticket (vs. close the detail) — drives whether the
+    /// detail shows a "Back" affordance.
+    pub(crate) fn can_go_back(&self) -> bool {
+        !self.back_stack.is_empty()
+    }
+
+    /// Set the currently-shown ticket in the given presentation and request its notes.
+    fn set_current(&mut self, bridge: &Bridge, ticket: &Ticket, expanded: bool) {
         bridge.send(Event::load_notes(ticket.id));
-        self.modal = Some(detail::TicketModal::new(ticket));
+        let mut modal = detail::TicketModal::new(ticket);
+        modal.expanded = expanded;
+        self.modal = Some(modal);
     }
 }
 

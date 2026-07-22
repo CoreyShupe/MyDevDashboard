@@ -20,7 +20,7 @@ use super::{ProjectsState, section_label, truncate};
 #[derive(Default)]
 pub(super) struct RowActions {
     pub(super) remove: Option<Uuid>,
-    pub(super) open_ticket: Option<Uuid>,
+    pub(super) open_ticket: Option<(Uuid, crate::ui::tasks::TicketOpen)>,
 }
 
 /// Draft state for the open "create worktree" modal (always ticket-driven).
@@ -28,14 +28,43 @@ pub(super) struct NewWorktreeModal {
     pub(super) ticket_id: Uuid,
     project_id: Option<Uuid>,
     branch: String,
+    /// Whether the branch picker is in "type a new branch" mode (vs. picking an existing one).
+    typing_new: bool,
 }
 
 impl NewWorktreeModal {
-    pub(super) fn new(ticket_id: Uuid) -> Self {
+    /// `default_branch` pre-selects the ticket's first existing branch (a convenience). When the
+    /// ticket has none yet, the picker opens straight into "new branch" typing mode.
+    pub(super) fn new(ticket_id: Uuid, default_branch: String) -> Self {
+        let typing_new = default_branch.trim().is_empty();
         Self {
             ticket_id,
             project_id: None,
+            branch: default_branch,
+            typing_new,
+        }
+    }
+}
+
+/// Draft state for the open "recreate under a new branch" modal — a non-destructive branch switch
+/// for a single removed marker (AGENTS.md §10). Holds the branch buffer; the worktree's identity
+/// (ticket, current branch) is re-read from the snapshot each frame so a stale draft can't act on
+/// a vanished worktree.
+pub(super) struct RecreateAsModal {
+    pub(super) worktree_id: Uuid,
+    branch: String,
+    /// Whether the branch picker is in "type a new branch" mode (vs. picking an existing one).
+    typing_new: bool,
+}
+
+impl RecreateAsModal {
+    /// Opens straight into "new branch" typing mode (a new branch is the point) — the ticket's
+    /// other branches are still one click away in the picker dropdown.
+    pub(super) fn new(worktree_id: Uuid) -> Self {
+        Self {
+            worktree_id,
             branch: String::new(),
+            typing_new: true,
         }
     }
 }
@@ -140,6 +169,8 @@ fn worktree_row(
         if projects.is_creating(w.project_id, w.ticket_id) {
             setup_indicator(ui);
         } else {
+            // The project detail shows LIVE worktrees only (markers live on their ticket), so
+            // recreate-under-new-branch is never offered here → `None`.
             worktree_actions(
                 ui,
                 bridge,
@@ -147,6 +178,7 @@ fn worktree_row(
                 &mut actions.remove,
                 projects,
                 Some(&mut actions.open_ticket),
+                None,
             );
         }
     });
@@ -162,6 +194,7 @@ pub(crate) fn render_ticket_worktrees(
     ticket_id: Uuid,
     projects: &ProjectsView,
     remove: &mut Option<Uuid>,
+    recreate_as: &mut Option<Uuid>,
 ) -> bool {
     let muted = theme::palette().muted;
     let worktrees: Vec<&Worktree> = projects.worktrees_for_ticket(ticket_id).collect();
@@ -208,7 +241,8 @@ pub(crate) fn render_ticket_worktrees(
                     setup_indicator(ui);
                 } else {
                     // On the ticket detail you're already on the ticket → no "Open ticket" button.
-                    worktree_actions(ui, bridge, w, remove, projects, None);
+                    // Markers here can be recreated on a new branch (ticket-owned, §10).
+                    worktree_actions(ui, bridge, w, remove, projects, None, Some(recreate_as));
                 }
             });
             ui.add_space(6.0);
@@ -227,21 +261,26 @@ pub(crate) fn render_ticket_worktrees(
     button::ghost(ui, &format!("{} Create worktree", theme::icon::ADD)).clicked()
 }
 
-/// The action row for a worktree: Open + Remove when live, Recreate when a marker. Open and
-/// Recreate emit directly; Remove is destructive, so it only records the request into `remove`
-/// (the caller confirms before it fires — AGENTS.md §13). While a slow action (remove / open) is
-/// in flight on this worktree, its buttons are replaced by a "waiting" spinner (AGENTS.md §10).
+/// The action row for a worktree: Open + Remove when live; Recreate + "Recreate as…" when a marker.
+/// Open and Recreate emit directly; Remove is destructive, so it only records the request into
+/// `remove` (the caller confirms before it fires — AGENTS.md §13). While a slow action (remove /
+/// open) is in flight on this worktree, its buttons are replaced by a "waiting" spinner (§10).
 ///
 /// `open_ticket` is `Some` only on the PROJECT detail page (where the ticket lives elsewhere): its
 /// button records the worktree's ticket id so the shell can open that ticket's detail. The TICKET
 /// detail passes `None` — you're already on the ticket, so "Open ticket" would be pointless there.
+///
+/// `recreate_as` is `Some` only on the TICKET detail (which owns markers, §10): its "Recreate as…"
+/// button records the marker's id so the shell can open the new-branch picker. The project detail
+/// passes `None` — it shows live worktrees only, never markers.
 fn worktree_actions(
     ui: &mut egui::Ui,
     bridge: &Bridge,
     w: &Worktree,
     remove: &mut Option<Uuid>,
     projects: &ProjectsView,
-    open_ticket: Option<&mut Option<Uuid>>,
+    open_ticket: Option<&mut Option<(Uuid, crate::ui::tasks::TicketOpen)>>,
+    recreate_as: Option<&mut Option<Uuid>>,
 ) {
     if let Some(busy) = projects.is_busy(w.id) {
         spinner_row(ui, busy.label());
@@ -249,11 +288,13 @@ fn worktree_actions(
     }
     ui.horizontal(|ui| {
         if w.is_live() {
-            if let Some(slot) = open_ticket
-                && button::secondary(ui, &format!("{} Open ticket", theme::icon::DASHBOARD))
-                    .clicked()
-            {
-                *slot = Some(w.ticket_id);
+            // Left-click opens the ticket as a modal, right-click as the full page (the shared
+            // ticket-link gesture, tasks navigation).
+            if let Some(slot) = open_ticket {
+                let btn = button::secondary(ui, &format!("{} Open ticket", theme::icon::DASHBOARD));
+                if let Some(open) = crate::ui::tasks::ticket_open_from(&btn) {
+                    *slot = Some((w.ticket_id, open));
+                }
             }
             if button::secondary(
                 ui,
@@ -266,8 +307,17 @@ fn worktree_actions(
             if button::danger(ui, &format!("{} Remove", theme::icon::DELETE)).clicked() {
                 *remove = Some(w.id);
             }
-        } else if button::secondary(ui, &format!("{} Recreate", theme::icon::ADD)).clicked() {
-            bridge.send(Event::recreate_worktree(w.id));
+        } else {
+            // Recreate on the same branch fires directly; "Recreate as…" needs the branch picker,
+            // so it records the request for the shell to open the modal (like create + remove, §2).
+            if button::secondary(ui, &format!("{} Recreate", theme::icon::ADD)).clicked() {
+                bridge.send(Event::recreate_worktree(w.id));
+            }
+            if let Some(slot) = recreate_as
+                && button::secondary(ui, &format!("{} Recreate as…", theme::icon::BRANCH)).clicked()
+            {
+                *slot = Some(w.id);
+            }
         }
     });
 }
@@ -347,8 +397,9 @@ impl ProjectsState {
     }
 
     /// The create-worktree picker (ticket-driven). Picks an eligible project (one with no
-    /// worktree for this ticket yet); the branch is locked to the ticket's shared branch if it
-    /// already has one, otherwise entered here (AGENTS.md §10).
+    /// worktree for this ticket yet) and a branch: the field is pre-filled with the ticket's first
+    /// branch and offers its other branches in a picker, but any branch (existing or new) is
+    /// allowed — a ticket's worktrees may diverge onto different branches (AGENTS.md §10).
     pub(super) fn render_create_worktree_modal(
         &mut self,
         ctx: &egui::Context,
@@ -356,6 +407,7 @@ impl ProjectsState {
         projects: &ProjectsView,
         tasks: &TasksView,
     ) {
+        let force_open = self.dev_force_branch_open;
         let Some(draft) = self.creating_worktree.as_mut() else {
             return;
         };
@@ -366,11 +418,9 @@ impl ProjectsState {
             .map(|t| t.title.clone())
             .unwrap_or_default();
 
-        // Branch is a ticket-level choice, shared across its worktrees.
-        let shared_branch = projects
-            .worktrees_for_ticket(ticket_id)
-            .next()
-            .map(|w| w.branch.clone());
+        // The ticket's distinct branches (from our own worktrees, live or marker) — offered as
+        // quick-pick suggestions in the branch field (§10).
+        let existing = ticket_branches(projects, ticket_id);
         // Eligible = projects with no worktree row for this ticket at all (markers get their own
         // "Recreate" action in the lists, so they're excluded here), and none currently being
         // provisioned for it (its loading row is already showing).
@@ -417,28 +467,21 @@ impl ProjectsState {
                     ui.add_space(10.0);
                     ui.label(egui::RichText::new("Branch").strong().color(muted));
                     ui.add_space(4.0);
-                    if let Some(branch) = &shared_branch {
-                        ui.label(egui::RichText::new(format!(
-                            "{} {branch}",
-                            theme::icon::BRANCH
-                        )));
-                        ui.label(
-                            egui::RichText::new(
-                                "Shared across this ticket's worktrees (chosen with the first).",
-                            )
-                            .color(muted)
-                            .size(12.0),
-                        );
-                    } else {
-                        input::text_field(ui, &mut draft.branch, "e.g. feature/short-description");
-                    }
+                    branch_picker(
+                        ui,
+                        "create_worktree",
+                        &existing,
+                        &mut draft.branch,
+                        &mut draft.typing_new,
+                        force_open,
+                    );
                 }
 
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
-                    let branch_ok = shared_branch.is_some() || !draft.branch.trim().is_empty();
-                    let can_create =
-                        !eligible.is_empty() && draft.project_id.is_some() && branch_ok;
+                    let can_create = !eligible.is_empty()
+                        && draft.project_id.is_some()
+                        && !draft.branch.trim().is_empty();
                     submit = button::primary_enabled(ui, "Create worktree", can_create).clicked();
                     cancel = button::secondary(ui, "Cancel").clicked();
                 });
@@ -450,10 +493,9 @@ impl ProjectsState {
 
         // End the `draft` borrow by copying out what we need before mutating `self`.
         let chosen = draft.project_id;
-        let typed_branch = draft.branch.trim().to_owned();
+        let branch = draft.branch.trim().to_owned();
 
         if submit && let Some(project_id) = chosen {
-            let branch = shared_branch.unwrap_or(typed_branch);
             if !branch.is_empty() {
                 bridge.send(Event::create_worktree(project_id, ticket_id, branch));
                 self.creating_worktree = None;
@@ -461,6 +503,189 @@ impl ProjectsState {
         } else if cancel {
             self.creating_worktree = None;
         }
+    }
+
+    /// The "recreate under a new branch" modal (marker-driven). Provisions a fresh worktree for the
+    /// marker on a NEW branch — a non-destructive branch switch that leaves the ticket's other
+    /// worktrees (and the old git branch) untouched (AGENTS.md §10). The field starts from the
+    /// marker's current branch and offers the ticket's other branches as quick-picks.
+    pub(super) fn render_recreate_worktree_as_modal(
+        &mut self,
+        ctx: &egui::Context,
+        bridge: &Bridge,
+        projects: &ProjectsView,
+        tasks: &TasksView,
+    ) {
+        let force_open = self.dev_force_branch_open;
+        let Some(draft) = self.recreating_worktree_as.as_mut() else {
+            return;
+        };
+        // Re-read the worktree from the snapshot; if it vanished (or went live elsewhere) close.
+        let Some(worktree) = projects
+            .worktrees
+            .iter()
+            .find(|w| w.id == draft.worktree_id && !w.is_live())
+        else {
+            self.recreating_worktree_as = None;
+            return;
+        };
+        let muted = theme::palette().muted;
+        let ticket_id = worktree.ticket_id;
+        let ticket_title = tasks.ticket(ticket_id).map(|t| t.title.clone());
+        let project_name = projects
+            .project(worktree.project_id)
+            .map(|c| c.project.name.clone())
+            .unwrap_or_else(|| "this project".to_owned());
+        let current_branch = worktree.branch.clone();
+        // Suggestions: the ticket's other branches, minus the marker's current one (recreating onto
+        // the same branch is just "Recreate", so don't offer it as a "switch to" pick).
+        let existing: Vec<String> = ticket_branches(projects, ticket_id)
+            .into_iter()
+            .filter(|b| b != &current_branch)
+            .collect();
+
+        let mut submit = false;
+        let mut cancel = false;
+
+        let response = egui::Modal::new(egui::Id::new(("recreate_worktree_as", draft.worktree_id)))
+            .frame(theme::surface_frame())
+            .show(ctx, |ui| {
+                ui.set_min_width(460.0);
+                ui.heading("Recreate under a new branch");
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{project_name} · {}",
+                        ticket_title.as_deref().unwrap_or("(ticket removed)")
+                    ))
+                    .color(muted)
+                    .size(13.0),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Currently on “{current_branch}”. Recreating on a new branch affects only \
+                         this worktree — the ticket's other worktrees and the old branch are left \
+                         alone.",
+                    ))
+                    .color(muted)
+                    .size(12.0),
+                );
+                ui.add_space(12.0);
+
+                ui.label(egui::RichText::new("New branch").strong().color(muted));
+                ui.add_space(4.0);
+                branch_picker(
+                    ui,
+                    "recreate_worktree_as",
+                    &existing,
+                    &mut draft.branch,
+                    &mut draft.typing_new,
+                    force_open,
+                );
+
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    let can_submit =
+                        !draft.branch.trim().is_empty() && draft.branch.trim() != current_branch;
+                    submit = button::primary_enabled(ui, "Recreate", can_submit).clicked();
+                    cancel = button::secondary(ui, "Cancel").clicked();
+                });
+            });
+
+        if response.should_close() {
+            cancel = true;
+        }
+
+        let id = draft.worktree_id;
+        let branch = draft.branch.trim().to_owned();
+        if submit && !branch.is_empty() && branch != current_branch {
+            bridge.send(Event::recreate_worktree_as(id, branch));
+            self.recreating_worktree_as = None;
+        } else if cancel {
+            self.recreating_worktree_as = None;
+        }
+    }
+}
+
+/// A ticket's distinct branch names, drawn from OUR worktrees (live + markers), oldest first —
+/// the "list of options" the branch pickers offer (from our DB, not git's, per owner intent §10).
+fn ticket_branches(projects: &ProjectsView, ticket_id: Uuid) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for w in projects.worktrees_for_ticket(ticket_id) {
+        if !out.contains(&w.branch) {
+            out.push(w.branch.clone());
+        }
+    }
+    out
+}
+
+/// The branch chooser used wherever a worktree branch is selected (create + recreate-as, §10).
+///
+/// It's dropdown-first: the combo lists the ticket's existing branches (from our own worktrees, not
+/// git) plus a trailing "＋ New branch…" entry. Picking an existing branch selects it; picking
+/// "New branch…" flips to typing mode and reveals a text field. The dropdown is also the way BACK —
+/// choosing an existing branch again leaves typing mode. When the ticket has no branches yet there's
+/// nothing to pick, so it degrades to a plain text field. `typing_new` persists the mode across
+/// frames; `buffer` receives the chosen/typed value. `force_open` (dev only) pins the popup open so
+/// the option list is visible in a screenshot.
+fn branch_picker(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    existing: &[String],
+    buffer: &mut String,
+    typing_new: &mut bool,
+    force_open: bool,
+) {
+    // No existing branches to choose from → just type one (the dropdown would be a single inert
+    // "New branch…" entry, so skip it).
+    if existing.is_empty() {
+        *typing_new = true;
+        input::text_field(ui, buffer, "e.g. feature/short-description");
+        return;
+    }
+
+    let new_branch_label = format!("{}  New branch…", theme::icon::ADD);
+    let selected_text = if *typing_new {
+        new_branch_label.clone()
+    } else if buffer.trim().is_empty() {
+        existing.first().cloned().unwrap_or_default()
+    } else {
+        buffer.clone()
+    };
+
+    let combo = egui::ComboBox::from_id_salt((id_salt, "branch"))
+        .selected_text(selected_text)
+        .show_ui(ui, |ui| {
+            for b in existing {
+                if ui
+                    .selectable_label(!*typing_new && buffer == b, b)
+                    .clicked()
+                {
+                    *buffer = b.clone();
+                    *typing_new = false;
+                }
+            }
+            ui.separator();
+            if ui
+                .selectable_label(*typing_new, &new_branch_label)
+                .clicked()
+            {
+                *typing_new = true;
+                buffer.clear();
+            }
+        });
+
+    // Dev-only: keep the popup open across frames so a DEV_VIEW screenshot shows the option list.
+    if force_open {
+        egui::Popup::open_id(ui.ctx(), combo.response.id.with("popup"));
+        ui.ctx().request_repaint();
+    }
+
+    // In "new branch" mode, reveal the field to type it (the dropdown above is the way back).
+    if *typing_new {
+        ui.add_space(6.0);
+        input::text_field(ui, buffer, "e.g. feature/short-description");
     }
 }
 

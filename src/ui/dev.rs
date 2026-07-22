@@ -62,6 +62,18 @@ pub enum DevView {
     /// A project's detail page with the "edit teardown script" modal open (run before a worktree
     /// is removed).
     TeardownScript,
+    /// The ticket detail modal drilled in from another ticket — shows the "← Back" affordance
+    /// (the browser-like back-navigation; left-click a ticket link = modal, right-click = full page).
+    TicketBack,
+    /// The ticket detail (full page) with the create-worktree picker open — project combo + the
+    /// branch dropdown open (the ticket's existing branches + a "New branch…" entry, §10).
+    CreateWorktree,
+    /// The create-worktree picker for a ticket with NO existing branches — the branch picker has
+    /// nothing to list, so it degrades to a plain "type a new branch" text field (§10).
+    CreateWorktreeFresh,
+    /// The ticket detail (full page) with the "recreate under a new branch" modal open over a
+    /// removed marker — the non-destructive branch switch (§10).
+    WorktreeRecreateAs,
     /// The ticket detail (full page) with a worktree being provisioned — its setup-script spinner
     /// showing, so the worktree isn't yet presented as ready (§10).
     WorktreeCreating,
@@ -107,6 +119,10 @@ impl DevView {
             "project" => Some(Self::Project),
             "setup-script" => Some(Self::SetupScript),
             "teardown-script" => Some(Self::TeardownScript),
+            "ticket-back" => Some(Self::TicketBack),
+            "create-worktree" => Some(Self::CreateWorktree),
+            "create-worktree-fresh" => Some(Self::CreateWorktreeFresh),
+            "worktree-recreate-as" => Some(Self::WorktreeRecreateAs),
             "worktree-creating" => Some(Self::WorktreeCreating),
             "worktree-removing" => Some(Self::WorktreeRemoving),
             "todos" => Some(Self::Todos),
@@ -371,12 +387,21 @@ pub fn mock_board() -> ViewData {
             "feature/projects-tab",
             false,
         ),
-        // A removed worktree (historical marker) on another ticket — recreatable.
+        // Two removed markers on another ticket, on DIFFERENT branches — recreatable, and their
+        // divergent branches populate the branch pickers' "existing branches" list (§10). Since
+        // branch is now per-worktree, a ticket's worktrees may sit on different branches.
         worktree(
             dashboard.id,
             tickets[2].id,
             "feature/design-pass",
             "feature/design-pass",
+            true,
+        ),
+        worktree(
+            webapp.id,
+            tickets[2].id,
+            "feature/design-tokens",
+            "feature/design-tokens",
             true,
         ),
     ];

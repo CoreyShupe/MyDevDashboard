@@ -3,9 +3,12 @@
 //!
 //! Invariants enforced here (AGENTS.md §10):
 //! - A ticket has at most one LIVE worktree per project (`create` rejects a duplicate).
-//! - A ticket's branch is chosen once and SHARED across all its worktrees (`create` reuses the
-//!   ticket's existing branch, ignoring the requested one, when there already is one).
-//! - Removal leaves a marker (`removed_at` set, folder cleaned); recreation revives the marker.
+//! - Branch is chosen PER worktree: `create` uses the requested branch verbatim (the UI offers the
+//!   ticket's existing branches as suggestions, but doesn't force them). This lets a ticket's
+//!   worktrees sit on DIFFERENT branches when project scope diverges.
+//! - Removal leaves a marker (`removed_at` set, folder cleaned). A marker can be revived on its
+//!   ORIGINAL branch (`recreate`) or on a NEW one (`recreate_as`) — the latter a non-destructive
+//!   branch switch that touches no other worktree and never deletes the old git branch.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -114,22 +117,9 @@ impl WorktreeService {
         })
     }
 
-    /// The branch a ticket's worktrees share, if it already has one (any row, live or marker).
-    pub async fn branch_for_ticket(&self, ticket_id: Uuid) -> Result<Option<String>, DbError> {
-        sqlx::query_scalar::<_, String>(
-            "SELECT branch FROM worktrees WHERE ticket_id = $1 ORDER BY created_at ASC LIMIT 1",
-        )
-        .bind(ticket_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|source| DbError::Query {
-            context: "load ticket worktree branch",
-            source,
-        })
-    }
-
-    /// Create a worktree for a ticket in a project. `requested_branch` is used ONLY when the
-    /// ticket has no worktree yet; otherwise the ticket's existing (shared) branch wins.
+    /// Create a worktree for a ticket in a project on `requested_branch` (used verbatim — the UI
+    /// offers the ticket's existing branches as suggestions but no longer forces them, so a
+    /// ticket's worktrees may diverge onto different branches, AGENTS.md §10).
     ///
     /// Returns the worktree AND whether it was *freshly* provisioned (`true`) vs. an existing
     /// folder adopted (`false`) — the caller runs [`run_setup`](Self::run_setup) only when fresh.
@@ -141,20 +131,13 @@ impl WorktreeService {
         ticket_id: Uuid,
         requested_branch: &str,
     ) -> Result<(Worktree, bool), AppError> {
-        // Branch is a ticket-level choice, shared across projects (AGENTS.md §10).
-        let branch = match self.branch_for_ticket(ticket_id).await? {
-            Some(existing) => existing,
-            None => {
-                let requested = requested_branch.trim();
-                if requested.is_empty() {
-                    return Err(ProjectError::Empty {
-                        field: "branch name",
-                    }
-                    .into());
-                }
-                requested.to_owned()
+        let branch = requested_branch.trim();
+        if branch.is_empty() {
+            return Err(ProjectError::Empty {
+                field: "branch name",
             }
-        };
+            .into());
+        }
 
         // Enforce one live worktree per (project, ticket).
         if let Some(existing) = self.row_for(project_id, ticket_id).await?
@@ -166,10 +149,9 @@ impl WorktreeService {
             .into());
         }
 
-        // The folder name IS the branch now: worktrees nest under `.dev-dash/worktrees/{repo}/`,
+        // The folder name IS the branch: worktrees nest under `.dev-dash/worktrees/{repo}/`,
         // and a valid git branch name is already a valid (possibly nested) relative path (§10).
-        self.provision(project_id, ticket_id, &branch, &branch)
-            .await
+        self.provision(project_id, ticket_id, branch, branch).await
     }
 
     /// Recreate a previously-removed worktree from its historical marker (same branch + folder).
@@ -178,6 +160,28 @@ impl WorktreeService {
     pub async fn recreate(&self, id: Uuid) -> Result<(Worktree, bool), AppError> {
         let row = self.row(id).await?;
         self.provision(row.project_id, row.ticket_id, &row.name, &row.branch)
+            .await
+    }
+
+    /// Recreate a removed marker under a NEW branch (with a matching folder name), leaving every
+    /// other worktree of the ticket untouched — a non-destructive branch switch for when a ticket's
+    /// scope changes in one project (AGENTS.md §10). The marker's OLD git branch is never deleted;
+    /// only this worktree's row (`name` + `branch`) is repointed. Like [`recreate`](Self::recreate),
+    /// the folder is gone, so this provisions afresh (`fresh = true`) and the caller re-runs setup.
+    pub async fn recreate_as(
+        &self,
+        id: Uuid,
+        new_branch: &str,
+    ) -> Result<(Worktree, bool), AppError> {
+        let branch = new_branch.trim();
+        if branch.is_empty() {
+            return Err(ProjectError::Empty {
+                field: "branch name",
+            }
+            .into());
+        }
+        let row = self.row(id).await?;
+        self.provision(row.project_id, row.ticket_id, branch, branch)
             .await
     }
 

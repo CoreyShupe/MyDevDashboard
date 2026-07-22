@@ -18,7 +18,7 @@ use crate::app::projects::View as ProjectsView;
 use crate::app::tasks::View as TasksView;
 
 use project::{NewProjectModal, ScriptKind, ScriptModal};
-use worktree::NewWorktreeModal;
+use worktree::{NewWorktreeModal, RecreateAsModal};
 
 // The ticket detail (tasks feature) delegates its worktree section here — creation is
 // ticket-driven, so the ticket page shows this ticket's worktrees and asks to create one.
@@ -41,9 +41,16 @@ pub struct ProjectsState {
     confirm_remove_worktree: Option<Uuid>,
     /// The open "create worktree" modal (driven from a ticket), if any.
     creating_worktree: Option<NewWorktreeModal>,
+    /// The open "recreate under a new branch" modal (driven from a marker on the ticket detail),
+    /// if any — a non-destructive branch switch for one worktree (§10).
+    recreating_worktree_as: Option<RecreateAsModal>,
     /// Set when a worktree row's "Open ticket" is clicked — the shell drains this and asks the
-    /// board to open that ticket's detail (cross-feature, the reverse of create-worktree, §2).
-    pending_open_ticket: Option<Uuid>,
+    /// board to open that ticket's detail (cross-feature, the reverse of create-worktree, §2). The
+    /// presentation rides along: left-click → modal, right-click → full page.
+    pending_open_ticket: Option<(Uuid, crate::ui::tasks::TicketOpen)>,
+    /// Dev-only: pins the branch picker's dropdown open so a DEV_VIEW screenshot captures the
+    /// option list (never set on a normal run — see `ui::dev`).
+    dev_force_branch_open: bool,
 }
 
 impl ProjectsState {
@@ -79,6 +86,7 @@ impl ProjectsState {
         self.render_confirm_delete_modal(ctx, bridge, projects);
         self.render_remove_worktree_modal(ctx, bridge, projects);
         self.render_create_worktree_modal(ctx, bridge, projects, tasks);
+        self.render_recreate_worktree_as_modal(ctx, bridge, projects, tasks);
     }
 
     /// Close a stale detail page / confirmation if its project disappeared in the latest
@@ -111,12 +119,29 @@ impl ProjectsState {
         {
             self.confirm_remove_worktree = None;
         }
+        // Close the recreate-as modal if its marker vanished or went live (the render self-heals
+        // too, but keep transient state honest against the latest snapshot).
+        if self.recreating_worktree_as.as_ref().is_some_and(|m| {
+            !projects
+                .worktrees
+                .iter()
+                .any(|w| w.id == m.worktree_id && !w.is_live())
+        }) {
+            self.recreating_worktree_as = None;
+        }
     }
 
     /// Open the create-worktree picker for a ticket. Called by the app shell when the ticket
-    /// detail (tasks feature) requests it (AGENTS.md §2 cross-feature coordination).
-    pub fn open_create_worktree(&mut self, ticket_id: Uuid) {
-        self.creating_worktree = Some(NewWorktreeModal::new(ticket_id));
+    /// detail (tasks feature) requests it (AGENTS.md §2 cross-feature coordination). `default_branch`
+    /// pre-fills the branch field with the ticket's first existing branch (empty if it has none).
+    pub fn open_create_worktree(&mut self, ticket_id: Uuid, default_branch: String) {
+        self.creating_worktree = Some(NewWorktreeModal::new(ticket_id, default_branch));
+    }
+
+    /// Open the "recreate under a new branch" modal for a removed marker. Called by the app shell
+    /// when the ticket detail requests it (cross-feature, §2).
+    pub fn open_recreate_worktree_as(&mut self, worktree_id: Uuid) {
+        self.recreating_worktree_as = Some(RecreateAsModal::new(worktree_id));
     }
 
     /// Open the remove-worktree confirmation for `id`. Called by the app shell when the ticket
@@ -128,13 +153,32 @@ impl ProjectsState {
 
     /// Take a pending "open this worktree's ticket" request raised by a worktree row on the project
     /// detail. The shell hands the ticket to the board's detail view (cross-feature, §2).
-    pub fn take_pending_open_ticket(&mut self) -> Option<Uuid> {
+    pub fn take_pending_open_ticket(&mut self) -> Option<(Uuid, crate::ui::tasks::TicketOpen)> {
         self.pending_open_ticket.take()
     }
 
     /// Dev-only: open a project's detail page directly for review (see `ui::dev`).
     pub fn dev_open_project(&mut self, project_id: Uuid) {
         self.open_project = Some(project_id);
+    }
+
+    /// Dev-only: open the create-worktree picker for a ticket, for review (see `ui::dev`).
+    /// `open_branches` pins the branch dropdown open so its options show in the screenshot.
+    pub fn dev_open_create_worktree(
+        &mut self,
+        ticket_id: Uuid,
+        default_branch: String,
+        open_branches: bool,
+    ) {
+        self.open_create_worktree(ticket_id, default_branch);
+        self.dev_force_branch_open = open_branches;
+    }
+
+    /// Dev-only: open the recreate-under-new-branch modal for a marker, for review (see `ui::dev`).
+    /// `open_branches` pins the branch dropdown open so its options show in the screenshot.
+    pub fn dev_open_recreate_worktree_as(&mut self, worktree_id: Uuid, open_branches: bool) {
+        self.open_recreate_worktree_as(worktree_id);
+        self.dev_force_branch_open = open_branches;
     }
 
     /// Dev-only: open the "add project" modal, pre-filled, for review (see `ui::dev`).

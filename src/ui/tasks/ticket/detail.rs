@@ -1,6 +1,10 @@
 //! `tasks` UI: the ticket detail view, in two interchangeable presentations —
-//!   - a **modal** overlay (default), and
-//!   - a **full page** in the workspace (via the modal's expand button; Back returns).
+//!   - a **modal** overlay (default; left-click a ticket link), and
+//!   - a **full page** over the active tab (right-click a link, or the modal's Expand button).
+//!
+//! Navigation is browser-like: following a ticket link pushes onto a back-stack, and "Back" pops
+//! to the previous ticket (or closes the detail and returns to the tab underneath). See
+//! `BoardState::{open_ticket, navigate_to, go_back, expand_current}` (tasks navigation).
 //!
 //! Both share one editing state ([`TicketModal`]). They deliberately show DIFFERENT amounts:
 //!   - the **modal** is a quick editor — [`body_core`] (title, description, save / move /
@@ -20,7 +24,7 @@ use crate::domain::tasks::{Note, Ticket};
 use crate::ui::components::{button, input};
 use crate::ui::theme;
 
-use crate::ui::tasks::BoardState;
+use crate::ui::tasks::{BoardState, TicketOpen};
 
 use super::note;
 
@@ -64,8 +68,13 @@ impl TicketModal {
 #[derive(Default)]
 struct Outcome {
     events: Vec<Event>,
-    /// Switch the open detail to this ticket (parent/child quick-link).
-    navigate: Option<Uuid>,
+    /// Follow a ticket link (parent/child quick-link) to another ticket, in the given presentation
+    /// (left-click → continue current; right-click → full page). Pushes back-history.
+    navigate: Option<(Uuid, TicketOpen)>,
+    /// "Back" was pressed — pop the back-stack (or close the detail if empty).
+    back: bool,
+    /// Expand the modal to the full page (pushes back-history so Back returns to the modal).
+    expand: bool,
     /// Close the detail entirely (delete / close button / backdrop).
     close: bool,
     /// The detail asked to create a worktree for this ticket (the shell opens the picker).
@@ -75,6 +84,9 @@ struct Outcome {
     request_delete: bool,
     /// The owner asked to remove this worktree — routed to the projects UI to confirm (§13).
     remove_worktree: Option<Uuid>,
+    /// The owner asked to recreate this marker on a NEW branch — routed to the projects UI, which
+    /// owns the branch picker (cross-feature, §2 + §10).
+    recreate_worktree_as: Option<Uuid>,
 }
 
 impl BoardState {
@@ -86,6 +98,7 @@ impl BoardState {
         view: &TasksView,
         projects: &ProjectsView,
     ) {
+        let can_back = self.can_go_back();
         let Some(modal) = self.modal.as_mut() else {
             return;
         };
@@ -100,13 +113,20 @@ impl BoardState {
             .show(ctx, |ui| {
                 ui.set_min_width(460.0);
                 ui.horizontal(|ui| {
+                    // "Back" only appears when there's history to return to (otherwise the X is the
+                    // way out) — a real back step, mirroring the full page (tasks navigation).
+                    if can_back
+                        && button::link(ui, &format!("{} Back", theme::icon::BACK)).clicked()
+                    {
+                        out.back = true;
+                    }
                     ui.heading("Ticket");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if button::icon(ui, theme::icon::CLOSE, "Close").clicked() {
                             out.close = true;
                         }
                         if button::icon(ui, theme::icon::EXPAND, "Expand to full page").clicked() {
-                            modal.expanded = true;
+                            out.expand = true;
                         }
                     });
                 });
@@ -127,7 +147,7 @@ impl BoardState {
                 )
                 .clicked()
                 {
-                    modal.expanded = true;
+                    out.expand = true;
                 }
             });
 
@@ -137,6 +157,9 @@ impl BoardState {
         }
         if let Some(id) = out.remove_worktree {
             self.pending_remove_worktree = Some(id);
+        }
+        if let Some(id) = out.recreate_worktree_as {
+            self.pending_recreate_worktree_as = Some(id);
         }
         self.settle_detail(bridge, view, out, dismissed);
     }
@@ -156,8 +179,10 @@ impl BoardState {
 
         let mut out = Outcome::default();
         ui.horizontal(|ui| {
+            // "Back" is a real back step: the previous ticket if there is one, else it closes the
+            // detail and returns to the tab underneath (tasks navigation).
             if button::link(ui, &format!("{} Back", theme::icon::BACK)).clicked() {
-                modal.expanded = false; // return to the modal presentation
+                out.back = true;
             }
         });
         ui.add_space(10.0);
@@ -189,11 +214,29 @@ impl BoardState {
         if let Some(id) = out.remove_worktree {
             self.pending_remove_worktree = Some(id);
         }
+        if let Some(id) = out.recreate_worktree_as {
+            self.pending_recreate_worktree_as = Some(id);
+        }
         self.settle_detail_page(bridge, view, out);
     }
 
-    /// Dispatch a modal's collected outcome. `dismissed` = backdrop/escape closed it.
+    /// Dispatch a modal's collected outcome. `dismissed` = backdrop/escape closed it. Both
+    /// presentations settle the same way (via [`settle`](Self::settle)); the modal adds
+    /// backdrop-dismiss as a full close.
     fn settle_detail(&mut self, bridge: &Bridge, view: &TasksView, out: Outcome, dismissed: bool) {
+        let close = out.close || dismissed;
+        self.settle(bridge, view, out, close);
+    }
+
+    /// Dispatch a full-page outcome.
+    fn settle_detail_page(&mut self, bridge: &Bridge, view: &TasksView, out: Outcome) {
+        let close = out.close;
+        self.settle(bridge, view, out, close);
+    }
+
+    /// Shared outcome dispatch for both presentations. Priority: send events, then handle (in
+    /// order) delete-confirm, back, expand, navigate, close — each mutually exclusive per frame.
+    fn settle(&mut self, bridge: &Bridge, view: &TasksView, out: Outcome, close: bool) {
         for event in out.events {
             bridge.send(event);
         }
@@ -201,35 +244,17 @@ impl BoardState {
             // Open the confirmation but leave the detail up behind it (§13) — cancelling returns
             // the owner to the ticket they were viewing.
             self.confirm_delete_ticket = self.modal.as_ref().map(|m| m.ticket_id);
-            return;
-        }
-        if let Some(target) = out.navigate {
+        } else if out.back {
+            self.go_back(bridge, view); // previous ticket, or close to the tab if none
+        } else if out.expand {
+            self.expand_current(); // modal → full page, pushing back-history
+        } else if let Some((target, open)) = out.navigate {
             if let Some(ticket) = view.ticket(target) {
-                self.open_ticket_modal(bridge, ticket);
+                self.navigate_to(bridge, ticket, open);
             }
-        } else if out.close || dismissed {
+        } else if close {
             self.modal = None;
-        }
-    }
-
-    /// Dispatch a full-page outcome; parent/child navigation stays on the full page.
-    fn settle_detail_page(&mut self, bridge: &Bridge, view: &TasksView, out: Outcome) {
-        for event in out.events {
-            bridge.send(event);
-        }
-        if out.request_delete {
-            self.confirm_delete_ticket = self.modal.as_ref().map(|m| m.ticket_id);
-            return;
-        }
-        if let Some(target) = out.navigate {
-            if let Some(ticket) = view.ticket(target) {
-                self.open_ticket_modal(bridge, ticket);
-                if let Some(modal) = self.modal.as_mut() {
-                    modal.expanded = true; // keep the full-page presentation
-                }
-            }
-        } else if out.close {
-            self.modal = None;
+            self.back_stack.clear();
         }
     }
 }
@@ -334,6 +359,7 @@ fn body_worktrees(
         modal.ticket_id,
         projects,
         &mut out.remove_worktree,
+        &mut out.recreate_worktree_as,
     ) {
         out.create_worktree = true;
     }
